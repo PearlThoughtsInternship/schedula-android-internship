@@ -113,4 +113,54 @@ class SqliteSchedulaRepositoryTest {
         assertThat(updated?.status).isEqualTo(AppointmentStatus.Rescheduled)
         assertThat(updated?.slotId).isEqualTo(nextSlot.id)
     }
+
+    @Test
+    fun cancelingAppointmentFreesSlotForAnotherBooking() = runTest {
+        repository.ensureSeeded()
+
+        val targetSlot = repository.observeSlots("doctor-kumar", "Today").first().first { !it.isBooked }
+        val firstBooking = repository.bookAppointment(
+            doctorId = "doctor-kumar",
+            patientId = "patient-self",
+            slotId = targetSlot.id,
+            appointmentType = AppointmentType.Regular,
+            channel = "APP",
+        ) as BookingResult.Success
+
+        repository.cancelAppointment(firstBooking.appointment.id)
+
+        val secondBooking = repository.bookAppointment(
+            doctorId = "doctor-kumar",
+            patientId = "patient-meena",
+            slotId = targetSlot.id,
+            appointmentType = AppointmentType.Online,
+            channel = "APP",
+        )
+
+        assertThat(secondBooking).isInstanceOf(BookingResult.Success::class.java)
+    }
+
+    @Test
+    fun doctorSearchFiltersByNameAndSpecialty() = runTest {
+        repository.ensureSeeded()
+
+        val byName = repository.observeDoctors("Lavangi").first()
+        val bySpecialty = repository.observeDoctors("Pediatrics").first()
+
+        assertThat(byName.map { it.id }).containsExactly("doctor-lavangi")
+        assertThat(bySpecialty.map { it.id }).containsExactly("doctor-kumar")
+    }
+
+    @Test
+    fun loginPhoneStatePersistsInMetaStore() = runTest {
+        repository.ensureSeeded()
+
+        repository.setLoggedInPhone("9876543210")
+        val loggedIn = repository.observeLoggedInPhone().first()
+        assertThat(loggedIn).isEqualTo("9876543210")
+
+        repository.setLoggedInPhone(null)
+        val loggedOut = repository.observeLoggedInPhone().first()
+        assertThat(loggedOut).isNull()
+    }
 }

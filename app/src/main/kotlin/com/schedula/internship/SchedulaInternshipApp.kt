@@ -44,6 +44,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.schedula.internship.model.Appointment
+import com.schedula.internship.model.AppointmentStatus
 import com.schedula.internship.model.AppointmentType
 import com.schedula.internship.model.Doctor
 import com.schedula.internship.model.Patient
@@ -561,8 +562,12 @@ private fun MyAppointmentsScreen(
     onOpenDetails: (String) -> Unit,
 ) {
     var tab by rememberSaveable { mutableIntStateOf(0) }
-    val upcoming = appointments.filter { it.status.name == "Scheduled" || it.status.name == "Rescheduled" }
-    val past = appointments.filter { it.status.name != "Scheduled" && it.status.name != "Rescheduled" }
+    val upcoming = appointments.filter {
+        it.status == AppointmentStatus.Scheduled || it.status == AppointmentStatus.Rescheduled
+    }
+    val past = appointments.filter {
+        it.status != AppointmentStatus.Scheduled && it.status != AppointmentStatus.Rescheduled
+    }
     val visible = if (tab == 0) upcoming else past
 
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
