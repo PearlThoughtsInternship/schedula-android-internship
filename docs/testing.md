@@ -15,6 +15,13 @@
   - reminder materialization from appointments + notices
   - invite/collaboration/review persistence
   - mocked API guardrails (availability, support validation, review validation)
+- `AppViewModelIntegrationTest`
+  - login + booking transition coverage
+  - payment workflow action validation
+  - support/review validation and success states
+- `AllScreensCaptureReportTest`
+  - renders all 23 screens without crash
+  - exports per-screen PNG artifacts for manual verification
 
 ## Test Topology
 
@@ -29,6 +36,17 @@ flowchart LR
 
 ```bash
 ./gradlew testDebugUnitTest
+```
+
+## Screen Verification Artifacts
+
+- PNG captures path: `app/build/reports/screen-captures/`
+- Capture index: `app/build/reports/screen-captures/index.md`
+- PDF generation:
+
+```bash
+cd app/build/reports/screen-captures
+magick $(ls -1 0[1-9]-*.png 1[0-9]-*.png 2[0-3]-*.png | sort) screen-report.pdf
 ```
 
 ## Suggested Next Tests

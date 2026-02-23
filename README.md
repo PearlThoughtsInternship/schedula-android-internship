@@ -7,6 +7,7 @@ Android application for appointment discovery, booking, follow-up, and patient s
 ```bash
 ./gradlew assembleDebug
 ./gradlew testDebugUnitTest
+cd app/build/reports/screen-captures && magick $(ls -1 0[1-9]-*.png 1[0-9]-*.png 2[0-3]-*.png | sort) screen-report.pdf
 ```
 
 Demo login OTP: `1234`
