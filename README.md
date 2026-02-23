@@ -35,3 +35,4 @@ Demo login OTP: `1234`
 - Appointment details, cancel, reschedule, and feedback
 - Reminder, reengagement, support, collaboration, and family workflows
 - Local-first persistence with Room (SQLite)
+- API-bounded behavior via deterministic mock contracts (availability, confirmation, payment, support, review)

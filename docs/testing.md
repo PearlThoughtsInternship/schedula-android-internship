@@ -9,6 +9,12 @@
   - booking success path
   - slot conflict behavior
   - cancel + reschedule state transitions
+  - payment/report/follow-up/feedback persistence
+  - support ticket and support chat persistence
+  - IVR plan conversion to appointment
+  - reminder materialization from appointments + notices
+  - invite/collaboration/review persistence
+  - mocked API guardrails (availability, support validation, review validation)
 
 ## Test Topology
 
@@ -27,6 +33,6 @@ flowchart LR
 
 ## Suggested Next Tests
 
-1. ViewModel screen transition tests.
-2. Compose UI tests for booking happy path.
-3. Regression tests for reminder/reschedule utility screens.
+1. ViewModel transition tests for bottom tab routing and logout/login restore.
+2. Compose UI tests for booking, reschedule, and support ticket forms.
+3. Contract tests for mock APIs to keep deterministic behavior stable.

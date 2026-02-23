@@ -8,6 +8,9 @@ erDiagram
   PATIENTS ||--o{ APPOINTMENTS : books
   DOCTORS ||--o{ APPOINTMENTS : receives
   SLOTS ||--o{ APPOINTMENTS : scheduled_as
+  APPOINTMENTS ||--o{ DOCTOR_NOTICES : notified_by
+  APPOINTMENTS ||--o{ REMINDERS : rendered_as
+  APPOINTMENTS ||--o{ IVR_PLANS : converted_from
 
   DOCTORS {
     string id PK
@@ -45,6 +48,30 @@ erDiagram
     string status
     string type
     string channel
+    string confirmationCode
+    string paymentStatus
+    string paymentReference
+    string report
+    bool followUpRequested
+  }
+
+  SUPPORT_TICKETS {
+    string id PK
+    string subject
+    string message
+    string status
+    string externalReference
+    int estimatedResolutionHours
+  }
+
+  IVR_PLANS {
+    string id PK
+    string doctorId FK
+    string patientId FK
+    string slotId FK
+    string status
+    bool paymentConfirmed
+    string convertedAppointmentId
   }
 ```
 
