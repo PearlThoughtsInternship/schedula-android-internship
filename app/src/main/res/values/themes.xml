@@ -1,0 +1,3 @@
+<resources>
+    <style name="Theme.SchedulaInternship" parent="android:Theme.Material.Light.NoActionBar" />
+</resources>
