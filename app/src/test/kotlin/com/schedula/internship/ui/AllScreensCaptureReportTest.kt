@@ -54,8 +54,10 @@ import org.junit.runner.RunWith
 import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows
+import org.robolectric.annotation.GraphicsMode
 
 @RunWith(RobolectricTestRunner::class)
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
 class AllScreensCaptureReportTest {
 
     @Test
@@ -372,9 +374,25 @@ class AllScreensCaptureReportTest {
         val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
         root.draw(canvas)
+        val uniqueColors = countUniqueSampledColors(bitmap, sampleStep = 24)
+        assertThat(uniqueColors).isAtLeast(2)
         outputFile.outputStream().use { stream ->
             bitmap.compress(Bitmap.CompressFormat.PNG, 100, stream)
         }
+    }
+
+    private fun countUniqueSampledColors(bitmap: Bitmap, sampleStep: Int): Int {
+        val colors = HashSet<Int>()
+        var y = 0
+        while (y < bitmap.height) {
+            var x = 0
+            while (x < bitmap.width) {
+                colors.add(bitmap.getPixel(x, y))
+                x += sampleStep
+            }
+            y += sampleStep
+        }
+        return colors.size
     }
 
     private fun createMarkdownIndex(captures: List<CapturedScreen>, outputDir: File) {
