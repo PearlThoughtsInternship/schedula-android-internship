@@ -5,4 +5,5 @@ data class GoogleReviewState(
     val submitted: Boolean,
     val rating: Int?,
     val comment: String,
+    val moderationReference: String?,
 )

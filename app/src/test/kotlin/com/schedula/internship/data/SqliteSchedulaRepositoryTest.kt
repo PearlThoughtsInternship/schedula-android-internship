@@ -57,6 +57,7 @@ class SqliteSchedulaRepositoryTest {
         }
         assertThat(upcoming).isNotEmpty()
         assertThat(upcoming.first().slotId).isEqualTo(slot.id)
+        assertThat(upcoming.first().confirmationCode).startsWith("CNF-")
     }
 
     @Test
@@ -92,7 +93,7 @@ class SqliteSchedulaRepositoryTest {
             doctorId = "doctor-kumar",
             patientId = "patient-self",
             slotId = bookedSlot.id,
-            appointmentType = AppointmentType.Regular,
+            appointmentType = bookedSlot.type,
             channel = "APP",
         ) as BookingResult.Success
 
@@ -100,7 +101,9 @@ class SqliteSchedulaRepositoryTest {
         val canceled = repository.observeAppointment(booked.appointment.id).first()
         assertThat(canceled?.status).isEqualTo(AppointmentStatus.Cancelled)
 
-        val replacement = repository.observeSlots("doctor-kumar", "2nd Oct").first().first { !it.isBooked }
+        val replacement = repository.observeSlots("doctor-kumar", "2nd Oct").first().first {
+            !it.isBooked && it.type == AppointmentType.Online
+        }
         val rebooked = repository.bookAppointment(
             doctorId = "doctor-kumar",
             patientId = "patient-self",
@@ -109,13 +112,16 @@ class SqliteSchedulaRepositoryTest {
             channel = "APP",
         ) as BookingResult.Success
 
-        val nextSlot = repository.observeSlots("doctor-kumar", "3rd Oct").first().first { !it.isBooked }
+        val nextSlot = repository.observeSlots("doctor-kumar", "3rd Oct").first().first {
+            !it.isBooked && it.type == AppointmentType.Online
+        }
         val rescheduled = repository.rescheduleAppointment(rebooked.appointment.id, nextSlot.id)
         assertThat(rescheduled).isInstanceOf(BookingResult.Success::class.java)
 
         val updated = repository.observeAppointment(rebooked.appointment.id).first()
         assertThat(updated?.status).isEqualTo(AppointmentStatus.Rescheduled)
         assertThat(updated?.slotId).isEqualTo(nextSlot.id)
+        assertThat(updated?.confirmationCode).startsWith("RCNF-")
     }
 
     @Test
@@ -127,7 +133,7 @@ class SqliteSchedulaRepositoryTest {
             doctorId = "doctor-kumar",
             patientId = "patient-self",
             slotId = targetSlot.id,
-            appointmentType = AppointmentType.Regular,
+            appointmentType = targetSlot.type,
             channel = "APP",
         ) as BookingResult.Success
 
@@ -137,7 +143,7 @@ class SqliteSchedulaRepositoryTest {
             doctorId = "doctor-kumar",
             patientId = "patient-meena",
             slotId = targetSlot.id,
-            appointmentType = AppointmentType.Online,
+            appointmentType = targetSlot.type,
             channel = "APP",
         )
 
@@ -177,17 +183,19 @@ class SqliteSchedulaRepositoryTest {
             doctorId = "doctor-kumar",
             patientId = "patient-self",
             slotId = slot.id,
-            appointmentType = AppointmentType.Regular,
+            appointmentType = slot.type,
             channel = "APP",
         ) as BookingResult.Success
 
-        repository.markPaymentPaid(booked.appointment.id)
+        val paymentResult = repository.markPaymentPaid(booked.appointment.id)
         repository.saveAppointmentReport(booked.appointment.id, "Vitals stable")
         repository.setFollowUpRequested(booked.appointment.id, true)
         repository.submitConsultingFeedback(booked.appointment.id, consulting = 5, hospital = 4, waiting = 3)
 
+        assertThat(paymentResult).isInstanceOf(OperationResult.Success::class.java)
         val updated = repository.observeAppointment(booked.appointment.id).first()
         assertThat(updated?.paymentStatus).isEqualTo(PaymentStatus.Paid)
+        assertThat(updated?.paymentReference).startsWith("PAY-")
         assertThat(updated?.report).isEqualTo("Vitals stable")
         assertThat(updated?.followUpRequested).isTrue()
         assertThat(updated?.consultingFeedback).isEqualTo(5)
@@ -199,14 +207,17 @@ class SqliteSchedulaRepositoryTest {
     fun supportTicketAndChatAreStored() = runTest {
         repository.ensureSeeded()
 
-        repository.createSupportTicket("Payment issue", "Unable to complete payment")
+        val ticketResult = repository.createSupportTicket("Payment issue", "Unable to complete payment")
         repository.sendChatMessage(ChatThreadType.Support, ChatSender.User, "Need help quickly")
 
+        assertThat(ticketResult).isInstanceOf(OperationResult.Success::class.java)
         val tickets = repository.observeSupportTickets().first()
         val supportChat = repository.observeChat(ChatThreadType.Support).first()
 
         assertThat(tickets).isNotEmpty()
         assertThat(tickets.first().subject).isEqualTo("Payment issue")
+        assertThat(tickets.first().externalReference).startsWith("SUP-")
+        assertThat(tickets.first().estimatedResolutionHours).isEqualTo(4)
         assertThat(supportChat.last().content).contains("Need help quickly")
     }
 
@@ -220,6 +231,7 @@ class SqliteSchedulaRepositoryTest {
 
         val updatedPlan = repository.observeIvrPlans().first().first { it.id == plan.id }
         assertThat(updatedPlan.status).isEqualTo(IvrPlanStatus.Converted)
+        assertThat(updatedPlan.convertedAppointmentId).isNotNull()
     }
 
     @Test
@@ -238,6 +250,7 @@ class SqliteSchedulaRepositoryTest {
         assertThat(collaboration.connected).isTrue()
         assertThat(review.submitted).isTrue()
         assertThat(review.rating).isEqualTo(5)
+        assertThat(review.moderationReference).startsWith("REV-")
     }
 
     @Test
@@ -249,5 +262,43 @@ class SqliteSchedulaRepositoryTest {
         assertThat(reminders).isNotEmpty()
         assertThat(reminders.any { it.id.startsWith("reminder-appt-") }).isTrue()
         assertThat(reminders.any { it.id.startsWith("reminder-notice-") }).isTrue()
+    }
+
+    @Test
+    fun apiAvailabilityRejectsBlockedSlot() = runTest {
+        repository.ensureSeeded()
+
+        val blocked = repository.observeSlots("doctor-kumar", "Today").first().first { it.id.endsWith("-3") }
+        val result = repository.bookAppointment(
+            doctorId = "doctor-kumar",
+            patientId = "patient-self",
+            slotId = blocked.id,
+            appointmentType = blocked.type,
+            channel = "APP",
+        )
+
+        assertThat(result).isInstanceOf(BookingResult.SlotUnavailable::class.java)
+    }
+
+    @Test
+    fun reviewValidationRejectsLowRatingWithoutComment() = runTest {
+        repository.ensureSeeded()
+
+        val result = repository.submitGoogleReview(rating = 2, comment = "bad")
+
+        assertThat(result).isInstanceOf(OperationResult.Error::class.java)
+        val state = repository.observeGoogleReviewState().first()
+        assertThat(state.submitted).isFalse()
+    }
+
+    @Test
+    fun supportValidationRejectsShortSubject() = runTest {
+        repository.ensureSeeded()
+
+        val result = repository.createSupportTicket("abc", "long enough issue text")
+
+        assertThat(result).isInstanceOf(OperationResult.Error::class.java)
+        val tickets = repository.observeSupportTickets().first()
+        assertThat(tickets).isEmpty()
     }
 }

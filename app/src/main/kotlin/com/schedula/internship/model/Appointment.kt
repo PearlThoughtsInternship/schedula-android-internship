@@ -41,4 +41,6 @@ data class Appointment(
     val consultingFeedback: Int?,
     val hospitalFeedback: Int?,
     val waitingTimeFeedback: Int?,
+    val confirmationCode: String,
+    val paymentReference: String?,
 )

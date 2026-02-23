@@ -231,7 +231,11 @@ fun SchedulaInternshipApp(
                 )
 
                 Screen.AppointmentReschedule -> AppointmentRescheduleScreen(
+                    dateOptions = dateOptions,
+                    selectedDate = uiState.selectedDateLabel,
                     slots = slots,
+                    appointmentType = selectedAppointment?.type,
+                    onPickDate = viewModel::selectDate,
                     onConfirm = viewModel::confirmReschedule,
                     onBack = { selectedAppointment?.id?.let(viewModel::openAppointmentDetails) },
                 )
@@ -510,7 +514,7 @@ private fun BookingTimeScreen(
             items(slots.filterNot { it.isBooked }, key = { it.id }) { slot ->
                 Card(modifier = Modifier.fillMaxWidth()) {
                     Row(modifier = Modifier.fillMaxWidth().padding(12.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text(slot.timeLabel)
+                        Text("${slot.timeLabel} • ${slot.type.name}")
                         OutlinedButton(onClick = { onSlotClick(slot.id) }) {
                             Text(if (selectedSlotId == slot.id) "Selected" else "Select")
                         }
@@ -584,6 +588,7 @@ private fun BookingConfirmationScreen(
         Spacer(Modifier.height(12.dp))
         Text("Your appointment with ${appointment.doctorName} is confirmed")
         Text("Token #${appointment.tokenNumber} at ${appointment.timeLabel}")
+        Text("Confirmation: ${appointment.confirmationCode}")
         Text("Please report 15 minutes earlier")
         Spacer(Modifier.height(16.dp))
         Button(onClick = onAddPatientDetails, modifier = Modifier.fillMaxWidth()) { Text("Add patient details") }
@@ -625,6 +630,9 @@ private fun PatientDetailsScreen(
         Text("Complaint: ${appointment?.complaint.orEmpty()}")
         Spacer(Modifier.height(12.dp))
         Text("Payment: ${appointment?.paymentStatus ?: PaymentStatus.Unpaid}")
+        if (!appointment?.paymentReference.isNullOrBlank()) {
+            Text("Payment ref: ${appointment?.paymentReference}")
+        }
         Button(onClick = onPay, enabled = appointment?.paymentStatus == PaymentStatus.Unpaid, modifier = Modifier.fillMaxWidth()) {
             Text("Pay consultation fee upfront")
         }
@@ -730,6 +738,10 @@ private fun AppointmentDetailsScreen(
         Text("Token: #${appointment.tokenNumber}")
         Text("Live tracking: $patientsAhead patients ahead. Expected in ${expectedMinutes} mins")
         Text("Payment: ${appointment.paymentStatus}")
+        if (!appointment.paymentReference.isNullOrBlank()) {
+            Text("Payment ref: ${appointment.paymentReference}")
+        }
+        Text("Confirmation: ${appointment.confirmationCode}")
         Text("Report: ${appointment.report.ifBlank { "Not added" }}")
         Text("Follow-up: ${if (appointment.followUpRequested) "Requested" else "Not requested"}")
         Spacer(Modifier.height(12.dp))
@@ -759,7 +771,11 @@ private fun AppointmentCancelScreen(
 
 @Composable
 private fun AppointmentRescheduleScreen(
+    dateOptions: List<String>,
+    selectedDate: String,
     slots: List<Slot>,
+    appointmentType: AppointmentType?,
+    onPickDate: (String) -> Unit,
     onConfirm: (String) -> Unit,
     onBack: () -> Unit,
 ) {
@@ -767,11 +783,27 @@ private fun AppointmentRescheduleScreen(
         OutlinedButton(onClick = onBack) { Text("Back") }
         Spacer(Modifier.height(12.dp))
         Text("Appointment reschedule", style = MaterialTheme.typography.titleLarge)
+        Text("Pick date")
+        LazyColumn(modifier = Modifier.height(120.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            items(dateOptions, key = { it }) { date ->
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text(date)
+                    OutlinedButton(onClick = { onPickDate(date) }) {
+                        Text(if (selectedDate == date) "Selected" else "Select")
+                    }
+                }
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+        Text("Pick slot")
         LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.weight(1f)) {
-            items(slots.filterNot { it.isBooked }, key = { it.id }) { slot ->
+            items(
+                slots.filter { !it.isBooked && (appointmentType == null || it.type == appointmentType) },
+                key = { it.id },
+            ) { slot ->
                 Card(modifier = Modifier.fillMaxWidth()) {
                     Row(modifier = Modifier.fillMaxWidth().padding(12.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text(slot.timeLabel)
+                        Text("${slot.timeLabel} • ${slot.type.name}")
                         Button(onClick = { onConfirm(slot.id) }) { Text("Book") }
                     }
                 }
@@ -960,6 +992,9 @@ private fun SeamlessAppointmentScreen(
                         Text("${plan.ivrAppId} • ${plan.status}")
                         Text("Doctor: ${plan.doctorId}, Patient: ${plan.patientId}")
                         Text("Date: ${plan.dateLabel}")
+                        if (!plan.convertedAppointmentId.isNullOrBlank()) {
+                            Text("Appointment: ${plan.convertedAppointmentId}")
+                        }
                         if (plan.status == IvrPlanStatus.Planned || plan.status == IvrPlanStatus.Confirmed) {
                             Button(onClick = { onConfirmPlan(plan.id) }) { Text("Confirm payment + convert") }
                         }
@@ -1047,6 +1082,7 @@ private fun SupportScreen(
                 Card(modifier = Modifier.fillMaxWidth()) {
                     Column(modifier = Modifier.padding(8.dp)) {
                         Text("${ticket.subject} • ${ticket.status}")
+                        Text("Ref: ${ticket.externalReference} • ETA ${ticket.estimatedResolutionHours}h")
                         Text(ticket.message)
                     }
                 }
@@ -1112,6 +1148,9 @@ private fun GoogleReviewScreen(
         Text("Google Review Requested", style = MaterialTheme.typography.titleLarge)
         Text("Express your gratitude for the doctor")
         Text("Status: ${if (state.submitted) "Submitted" else "Pending"}")
+        if (!state.moderationReference.isNullOrBlank()) {
+            Text("Reference: ${state.moderationReference}")
+        }
         RatingRow("Rating", rating) { rating = it }
         OutlinedTextField(comment, { comment = it }, label = { Text("Comment") }, modifier = Modifier.fillMaxWidth())
         Button(onClick = { onSubmit(rating, comment) }, modifier = Modifier.fillMaxWidth()) { Text("Submit review") }

@@ -122,6 +122,8 @@ data class AppointmentEntity(
     val status: String,
     val type: String,
     val paymentStatus: String,
+    val confirmationCode: String,
+    val paymentReference: String?,
     val report: String,
     val followUpRequested: Boolean,
     val consultingFeedback: Int?,
@@ -145,6 +147,8 @@ data class SupportTicketEntity(
     val subject: String,
     val message: String,
     val status: String,
+    val externalReference: String,
+    val estimatedResolutionHours: Int,
     val createdAtEpochMillis: Long,
 )
 
@@ -167,6 +171,7 @@ data class IvrPlanEntity(
     val slotId: String,
     val paymentConfirmed: Boolean,
     val status: String,
+    val convertedAppointmentId: String?,
 )
 
 @Entity(tableName = "collaboration_state")
@@ -183,6 +188,7 @@ data class GoogleReviewEntity(
     val submitted: Boolean,
     val rating: Int?,
     val comment: String,
+    val moderationReference: String?,
 )
 
 @Entity(tableName = "app_meta")
@@ -353,7 +359,7 @@ interface SchedulaDao {
         GoogleReviewEntity::class,
         AppMetaEntity::class,
     ],
-    version = 2,
+    version = 3,
     exportSchema = false,
 )
 abstract class SchedulaDatabase : RoomDatabase() {
@@ -362,7 +368,7 @@ abstract class SchedulaDatabase : RoomDatabase() {
     companion object {
         fun build(context: Context): SchedulaDatabase {
             return Room.databaseBuilder(context, SchedulaDatabase::class.java, "schedula-internship.db")
-                .fallbackToDestructiveMigration()
+                .fallbackToDestructiveMigration(dropAllTables = true)
                 .build()
         }
     }
@@ -383,6 +389,11 @@ sealed interface BookingResult {
     data class Success(val appointment: Appointment) : BookingResult
     data class SlotUnavailable(val message: String) : BookingResult
     data class Error(val message: String) : BookingResult
+}
+
+sealed interface OperationResult {
+    data class Success(val message: String) : OperationResult
+    data class Error(val message: String) : OperationResult
 }
 
 interface SchedulaRepository {
@@ -414,7 +425,7 @@ interface SchedulaRepository {
     suspend fun cancelAppointment(appointmentId: String)
     suspend fun rescheduleAppointment(appointmentId: String, newSlotId: String): BookingResult
 
-    suspend fun markPaymentPaid(appointmentId: String)
+    suspend fun markPaymentPaid(appointmentId: String): OperationResult
     suspend fun saveAppointmentReport(appointmentId: String, report: String)
     suspend fun setFollowUpRequested(appointmentId: String, requested: Boolean)
     suspend fun submitConsultingFeedback(appointmentId: String, consulting: Int, hospital: Int, waiting: Int)
@@ -427,7 +438,7 @@ interface SchedulaRepository {
     suspend fun sendChatMessage(threadType: ChatThreadType, sender: ChatSender, content: String)
 
     fun observeSupportTickets(): Flow<List<SupportTicket>>
-    suspend fun createSupportTicket(subject: String, message: String)
+    suspend fun createSupportTicket(subject: String, message: String): OperationResult
 
     fun observeIvrPlans(): Flow<List<IvrPlan>>
     suspend fun upsertIvrPlan(plan: IvrPlan)
@@ -437,11 +448,15 @@ interface SchedulaRepository {
     suspend fun setCollaborationConnected(connected: Boolean)
 
     fun observeGoogleReviewState(): Flow<GoogleReviewState>
-    suspend fun submitGoogleReview(rating: Int, comment: String)
+    suspend fun submitGoogleReview(rating: Int, comment: String): OperationResult
 }
 
 class SqliteSchedulaRepository(
     private val database: SchedulaDatabase,
+    private val schedulingApi: SchedulingApi = LocalMockSchedulingApi(),
+    private val billingApi: BillingApi = LocalMockBillingApi(),
+    private val supportApi: SupportApi = LocalMockSupportApi(),
+    private val reviewApi: ReviewApi = LocalMockReviewApi(),
 ) : SchedulaRepository {
     private val dao = database.dao()
 
@@ -456,7 +471,16 @@ class SqliteSchedulaRepository(
             dao.insertDoctorNotices(seedDoctorNotices())
             dao.insertIvrPlans(seedIvrPlans())
             dao.upsertCollaboration(CollaborationEntity(id = "default", connected = false, groupName = "New Mothers Group"))
-            dao.upsertGoogleReview(GoogleReviewEntity(id = "default", requested = true, submitted = false, rating = null, comment = ""))
+            dao.upsertGoogleReview(
+                GoogleReviewEntity(
+                    id = "default",
+                    requested = true,
+                    submitted = false,
+                    rating = null,
+                    comment = "",
+                    moderationReference = null,
+                ),
+            )
             dao.upsertMeta(AppMetaEntity(MetaLoggedInPhone, ""))
         }
     }
@@ -526,6 +550,30 @@ class SqliteSchedulaRepository(
         val patient = dao.getPatient(patientId) ?: return BookingResult.Error("Patient not found")
         val slot = dao.getSlot(slotId) ?: return BookingResult.Error("Slot not found")
         if (slot.isBooked) return BookingResult.SlotUnavailable("Selected slot is no longer available")
+        if (slot.type != appointmentType.name) {
+            return BookingResult.Error("Selected slot does not support ${appointmentType.name.lowercase()} appointments.")
+        }
+
+        when (val availability = schedulingApi.checkSlotAvailability(doctorId = doctor.id, slotId = slot.id)) {
+            is ApiResult.Error -> return BookingResult.Error(availability.message)
+            is ApiResult.Success -> {
+                if (!availability.data.available) {
+                    return BookingResult.SlotUnavailable(availability.data.reason ?: "Slot is unavailable")
+                }
+            }
+        }
+
+        val confirmation = when (
+            val response = schedulingApi.confirmBooking(
+                doctorId = doctor.id,
+                patientId = patient.id,
+                slotId = slot.id,
+                channel = channel,
+            )
+        ) {
+            is ApiResult.Error -> return BookingResult.Error(response.message)
+            is ApiResult.Success -> response.data
+        }
 
         val appointmentId = "appointment-${System.currentTimeMillis()}"
         val token = (dao.maxToken() ?: 0) + 1
@@ -544,6 +592,8 @@ class SqliteSchedulaRepository(
                     status = AppointmentStatus.Scheduled.name,
                     type = appointmentType.name,
                     paymentStatus = PaymentStatus.Unpaid.name,
+                    confirmationCode = confirmation.confirmationCode,
+                    paymentReference = null,
                     report = "",
                     followUpRequested = false,
                     consultingFeedback = null,
@@ -557,7 +607,7 @@ class SqliteSchedulaRepository(
                     id = "chat-${System.currentTimeMillis()}",
                     threadType = ChatThreadType.Patient.name,
                     sender = ChatSender.System.name,
-                    content = "Appointment confirmed for ${patient.name}. You can add report or request follow-up.",
+                    content = "Appointment confirmed for ${patient.name}. Confirmation: ${confirmation.confirmationCode}.",
                     createdAtEpochMillis = System.currentTimeMillis(),
                 ),
             )
@@ -585,6 +635,22 @@ class SqliteSchedulaRepository(
         val current = dao.getAppointment(appointmentId) ?: return BookingResult.Error("Appointment not found")
         val newSlot = dao.getSlot(newSlotId) ?: return BookingResult.Error("Slot not found")
         if (newSlot.isBooked) return BookingResult.SlotUnavailable("Reschedule failed. Slot already booked")
+        if (newSlot.type != current.type) {
+            return BookingResult.Error("Please select a ${current.type.lowercase()} slot for this appointment.")
+        }
+
+        when (val availability = schedulingApi.checkSlotAvailability(current.doctorId, newSlot.id)) {
+            is ApiResult.Error -> return BookingResult.Error(availability.message)
+            is ApiResult.Success -> {
+                if (!availability.data.available) {
+                    return BookingResult.SlotUnavailable(availability.data.reason ?: "Selected slot is not available")
+                }
+            }
+        }
+        val confirmation = when (val response = schedulingApi.confirmReschedule(appointmentId, newSlot.id)) {
+            is ApiResult.Error -> return BookingResult.Error(response.message)
+            is ApiResult.Success -> response.data
+        }
 
         database.runInTransaction {
             dao.setSlotBooked(current.slotId, false)
@@ -593,6 +659,7 @@ class SqliteSchedulaRepository(
                 current.copy(
                     slotId = newSlot.id,
                     status = AppointmentStatus.Rescheduled.name,
+                    confirmationCode = confirmation.confirmationCode,
                     createdAtEpochMillis = System.currentTimeMillis(),
                 ),
             )
@@ -603,9 +670,32 @@ class SqliteSchedulaRepository(
         return BookingResult.Success(updated)
     }
 
-    override suspend fun markPaymentPaid(appointmentId: String) {
-        val current = dao.getAppointment(appointmentId) ?: return
-        dao.updateAppointment(current.copy(paymentStatus = PaymentStatus.Paid.name, createdAtEpochMillis = System.currentTimeMillis()))
+    override suspend fun markPaymentPaid(appointmentId: String): OperationResult {
+        val current = dao.getAppointment(appointmentId) ?: return OperationResult.Error("Appointment not found")
+        val appointmentRecord = dao.getAppointmentRecord(appointmentId)
+            ?: return OperationResult.Error("Appointment data not found")
+        if (current.paymentStatus == PaymentStatus.Paid.name) {
+            return OperationResult.Success("Payment already completed")
+        }
+
+        val payment = when (
+            val response = billingApi.capturePayment(
+                appointmentId = appointmentId,
+                amount = appointmentRecord.doctor.consultationFee,
+            )
+        ) {
+            is ApiResult.Error -> return OperationResult.Error(response.message)
+            is ApiResult.Success -> response.data
+        }
+
+        dao.updateAppointment(
+            current.copy(
+                paymentStatus = PaymentStatus.Paid.name,
+                paymentReference = payment.paymentReference,
+                createdAtEpochMillis = System.currentTimeMillis(),
+            ),
+        )
+        return OperationResult.Success("Payment confirmed (${payment.paymentReference})")
     }
 
     override suspend fun saveAppointmentReport(appointmentId: String, report: String) {
@@ -684,18 +774,30 @@ class SqliteSchedulaRepository(
         return dao.observeSupportTickets().map { rows -> rows.map(SupportTicketEntity::toModel) }
     }
 
-    override suspend fun createSupportTicket(subject: String, message: String) {
-        if (subject.isBlank() || message.isBlank()) return
+    override suspend fun createSupportTicket(subject: String, message: String): OperationResult {
+        if (subject.isBlank() || message.isBlank()) return OperationResult.Error("Subject and message are required")
+        val ack = when (val response = supportApi.acknowledgeTicket(subject.trim(), message.trim())) {
+            is ApiResult.Error -> return OperationResult.Error(response.message)
+            is ApiResult.Success -> response.data
+        }
+
         dao.insertSupportTicket(
             SupportTicketEntity(
                 id = "ticket-${System.currentTimeMillis()}",
                 subject = subject.trim(),
                 message = message.trim(),
                 status = SupportTicketStatus.Open.name,
+                externalReference = ack.externalReference,
+                estimatedResolutionHours = ack.estimatedResolutionHours,
                 createdAtEpochMillis = System.currentTimeMillis(),
             ),
         )
-        sendChatMessage(ChatThreadType.Support, ChatSender.Support, "Support ticket created: ${subject.trim()}")
+        sendChatMessage(
+            ChatThreadType.Support,
+            ChatSender.Support,
+            "Support ticket created: ${subject.trim()} (${ack.externalReference}), ETA ${ack.estimatedResolutionHours}h",
+        )
+        return OperationResult.Success("Support ticket created (${ack.externalReference})")
     }
 
     override fun observeIvrPlans(): Flow<List<IvrPlan>> {
@@ -708,17 +810,23 @@ class SqliteSchedulaRepository(
 
     override suspend fun confirmIvrPlan(planId: String): BookingResult {
         val plan = dao.getIvrPlan(planId) ?: return BookingResult.Error("IVR plan not found")
+        val slot = dao.getSlot(plan.slotId) ?: return BookingResult.Error("IVR slot not found")
         val confirmed = plan.copy(paymentConfirmed = true, status = IvrPlanStatus.Confirmed.name)
         dao.upsertIvrPlan(confirmed)
         val booking = bookAppointment(
             doctorId = confirmed.doctorId,
             patientId = confirmed.patientId,
             slotId = confirmed.slotId,
-            appointmentType = AppointmentType.Regular,
+            appointmentType = AppointmentType.valueOf(slot.type),
             channel = "IVR",
         )
         if (booking is BookingResult.Success) {
-            dao.upsertIvrPlan(confirmed.copy(status = IvrPlanStatus.Converted.name))
+            dao.upsertIvrPlan(
+                confirmed.copy(
+                    status = IvrPlanStatus.Converted.name,
+                    convertedAppointmentId = booking.appointment.id,
+                ),
+            )
         }
         return booking
     }
@@ -735,11 +843,22 @@ class SqliteSchedulaRepository(
 
     override fun observeGoogleReviewState(): Flow<GoogleReviewState> {
         return dao.observeGoogleReview().map { row ->
-            (row ?: GoogleReviewEntity(id = "default", requested = true, submitted = false, rating = null, comment = "")).toModel()
+            (row ?: GoogleReviewEntity(
+                id = "default",
+                requested = true,
+                submitted = false,
+                rating = null,
+                comment = "",
+                moderationReference = null,
+            )).toModel()
         }
     }
 
-    override suspend fun submitGoogleReview(rating: Int, comment: String) {
+    override suspend fun submitGoogleReview(rating: Int, comment: String): OperationResult {
+        val reviewAck = when (val response = reviewApi.submitReview(rating, comment)) {
+            is ApiResult.Error -> return OperationResult.Error(response.message)
+            is ApiResult.Success -> response.data
+        }
         dao.upsertGoogleReview(
             GoogleReviewEntity(
                 id = "default",
@@ -747,8 +866,10 @@ class SqliteSchedulaRepository(
                 submitted = true,
                 rating = rating,
                 comment = comment,
+                moderationReference = reviewAck.moderationReference,
             ),
         )
+        return OperationResult.Success("Review submitted (${reviewAck.moderationReference})")
     }
 
     private fun seedDoctors(): List<DoctorEntity> {
@@ -864,6 +985,8 @@ class SqliteSchedulaRepository(
                 status = AppointmentStatus.Scheduled.name,
                 type = AppointmentType.Regular.name,
                 paymentStatus = PaymentStatus.Unpaid.name,
+                confirmationCode = "CNF-SEED-0001",
+                paymentReference = null,
                 report = "",
                 followUpRequested = false,
                 consultingFeedback = null,
@@ -882,6 +1005,8 @@ class SqliteSchedulaRepository(
                 status = AppointmentStatus.Completed.name,
                 type = AppointmentType.Online.name,
                 paymentStatus = PaymentStatus.Paid.name,
+                confirmationCode = "CNF-SEED-0002",
+                paymentReference = "PAY-SEED-0002",
                 report = "Recovered well",
                 followUpRequested = false,
                 consultingFeedback = 5,
@@ -948,6 +1073,7 @@ class SqliteSchedulaRepository(
                 slotId = "doctor-lavangi-Tomorrow-2",
                 paymentConfirmed = false,
                 status = IvrPlanStatus.Planned.name,
+                convertedAppointmentId = null,
             ),
         )
     }
@@ -994,6 +1120,8 @@ private fun AppointmentRecord.toModel(): Appointment {
         consultingFeedback = appointment.consultingFeedback,
         hospitalFeedback = appointment.hospitalFeedback,
         waitingTimeFeedback = appointment.waitingTimeFeedback,
+        confirmationCode = appointment.confirmationCode,
+        paymentReference = appointment.paymentReference,
     )
 }
 
@@ -1014,6 +1142,8 @@ private fun SupportTicketEntity.toModel(): SupportTicket {
         message = message,
         status = SupportTicketStatus.valueOf(status),
         createdAtEpochMillis = createdAtEpochMillis,
+        externalReference = externalReference,
+        estimatedResolutionHours = estimatedResolutionHours,
     )
 }
 
@@ -1037,6 +1167,7 @@ private fun IvrPlanEntity.toModel(): IvrPlan {
         slotId = slotId,
         paymentConfirmed = paymentConfirmed,
         status = IvrPlanStatus.valueOf(status),
+        convertedAppointmentId = convertedAppointmentId,
     )
 }
 
@@ -1050,6 +1181,7 @@ private fun IvrPlan.toEntity(): IvrPlanEntity {
         slotId = slotId,
         paymentConfirmed = paymentConfirmed,
         status = status.name,
+        convertedAppointmentId = convertedAppointmentId,
     )
 }
 
@@ -1058,5 +1190,11 @@ private fun CollaborationEntity.toModel(): CollaborationState {
 }
 
 private fun GoogleReviewEntity.toModel(): GoogleReviewState {
-    return GoogleReviewState(requested = requested, submitted = submitted, rating = rating, comment = comment)
+    return GoogleReviewState(
+        requested = requested,
+        submitted = submitted,
+        rating = rating,
+        comment = comment,
+        moderationReference = moderationReference,
+    )
 }

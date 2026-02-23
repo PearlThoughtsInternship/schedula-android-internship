@@ -8,6 +8,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.schedula.internship.data.BookingResult
 import com.schedula.internship.data.LocalStoreProvider
+import com.schedula.internship.data.OperationResult
 import com.schedula.internship.data.SchedulaRepository
 import com.schedula.internship.data.SqliteSchedulaRepository
 import com.schedula.internship.domain.AuthRules
@@ -178,7 +179,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         .stateIn(
             viewModelScope,
             SharingStarted.WhileSubscribed(5_000),
-            GoogleReviewState(requested = true, submitted = false, rating = null, comment = ""),
+            GoogleReviewState(requested = true, submitted = false, rating = null, comment = "", moderationReference = null),
         )
 
     var uiState by mutableStateOf(AppUiState())
@@ -397,6 +398,15 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun openAppointmentDetails(appointmentId: String) {
+        appointments.value.firstOrNull { it.id == appointmentId }?.let { appointment ->
+            selectedDoctorIdFlow.value = appointment.doctorId
+            selectedDateFlow.value = appointment.dateLabel
+            uiState = uiState.copy(
+                selectedDoctorId = appointment.doctorId,
+                selectedDateLabel = appointment.dateLabel,
+                selectedSlotId = appointment.slotId,
+            )
+        }
         selectedAppointmentIdFlow.value = appointmentId
         uiState = uiState.copy(selectedAppointmentId = appointmentId, activeScreen = Screen.AppointmentDetails)
     }
@@ -414,6 +424,14 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun openRescheduleAppointment() {
+        selectedAppointment.value?.let { appointment ->
+            selectedDoctorIdFlow.value = appointment.doctorId
+            selectedDateFlow.value = appointment.dateLabel
+            uiState = uiState.copy(
+                selectedDoctorId = appointment.doctorId,
+                selectedDateLabel = appointment.dateLabel,
+            )
+        }
         uiState = uiState.copy(activeScreen = Screen.AppointmentReschedule)
     }
 
@@ -440,8 +458,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     fun markPaymentPaid() {
         val appointmentId = uiState.selectedAppointmentId ?: return
         viewModelScope.launch {
-            repository.markPaymentPaid(appointmentId)
-            uiState = uiState.copy(statusMessage = "Payment marked as paid")
+            when (val result = repository.markPaymentPaid(appointmentId)) {
+                is OperationResult.Success -> uiState = uiState.copy(statusMessage = result.message)
+                is OperationResult.Error -> uiState = uiState.copy(statusMessage = result.message)
+            }
         }
     }
 
@@ -529,15 +549,20 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     fun saveIvrPlan(ivrAppId: String) {
         val doctorId = uiState.selectedDoctorId ?: return
         val slotId = uiState.selectedSlotId ?: return
+        if (ivrAppId.isBlank()) {
+            uiState = uiState.copy(statusMessage = "IVR App ID is required")
+            return
+        }
         val plan = IvrPlan(
             id = "ivr-${System.currentTimeMillis()}",
             doctorId = doctorId,
             patientId = uiState.selectedPatientId,
-            ivrAppId = ivrAppId,
+            ivrAppId = ivrAppId.trim(),
             dateLabel = uiState.selectedDateLabel,
             slotId = slotId,
             paymentConfirmed = false,
             status = IvrPlanStatus.Planned,
+            convertedAppointmentId = null,
         )
         viewModelScope.launch {
             repository.upsertIvrPlan(plan)
@@ -586,8 +611,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     fun createSupportTicket(subject: String, message: String) {
         viewModelScope.launch {
-            repository.createSupportTicket(subject, message)
-            uiState = uiState.copy(statusMessage = "Support ticket created")
+            when (val result = repository.createSupportTicket(subject, message)) {
+                is OperationResult.Success -> uiState = uiState.copy(statusMessage = result.message)
+                is OperationResult.Error -> uiState = uiState.copy(statusMessage = result.message)
+            }
         }
     }
 
@@ -607,8 +634,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     fun submitGoogleReview(rating: Int, comment: String) {
         viewModelScope.launch {
-            repository.submitGoogleReview(rating, comment)
-            uiState = uiState.copy(statusMessage = "Review submitted")
+            when (val result = repository.submitGoogleReview(rating, comment)) {
+                is OperationResult.Success -> uiState = uiState.copy(statusMessage = result.message)
+                is OperationResult.Error -> uiState = uiState.copy(statusMessage = result.message)
+            }
         }
     }
 

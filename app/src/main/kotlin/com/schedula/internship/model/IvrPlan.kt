@@ -15,4 +15,5 @@ data class IvrPlan(
     val slotId: String,
     val paymentConfirmed: Boolean,
     val status: IvrPlanStatus,
+    val convertedAppointmentId: String?,
 )

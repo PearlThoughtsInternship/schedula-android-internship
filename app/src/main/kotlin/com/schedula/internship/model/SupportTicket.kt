@@ -12,4 +12,6 @@ data class SupportTicket(
     val message: String,
     val status: SupportTicketStatus,
     val createdAtEpochMillis: Long,
+    val externalReference: String,
+    val estimatedResolutionHours: Int,
 )
