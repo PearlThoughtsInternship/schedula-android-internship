@@ -33,9 +33,11 @@ import com.schedula.internship.model.ReminderItem
 import com.schedula.internship.model.Slot
 import com.schedula.internship.model.SupportTicket
 import com.schedula.internship.model.SupportTicketStatus
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.withContext
 
 private const val MetaLoggedInPhone = "logged_in_phone"
 
@@ -383,6 +385,13 @@ object LocalStoreProvider {
             instance ?: SchedulaDatabase.build(context.applicationContext).also { instance = it }
         }
     }
+
+    internal fun resetForTests() {
+        synchronized(this) {
+            instance?.close()
+            instance = null
+        }
+    }
 }
 
 sealed interface BookingResult {
@@ -459,29 +468,32 @@ class SqliteSchedulaRepository(
     private val reviewApi: ReviewApi = LocalMockReviewApi(),
 ) : SchedulaRepository {
     private val dao = database.dao()
+    private suspend fun <T> db(block: suspend () -> T): T = withContext(Dispatchers.IO) { block() }
 
     override suspend fun ensureSeeded() {
-        if (dao.countDoctors() > 0) return
-        database.runInTransaction {
-            dao.insertDoctors(seedDoctors())
-            dao.insertPatients(seedPatients())
-            dao.insertSlots(seedSlots())
-            dao.insertAppointments(seedAppointments())
-            dao.insertChatMessages(seedChatMessages())
-            dao.insertDoctorNotices(seedDoctorNotices())
-            dao.insertIvrPlans(seedIvrPlans())
-            dao.upsertCollaboration(CollaborationEntity(id = "default", connected = false, groupName = "New Mothers Group"))
-            dao.upsertGoogleReview(
-                GoogleReviewEntity(
-                    id = "default",
-                    requested = true,
-                    submitted = false,
-                    rating = null,
-                    comment = "",
-                    moderationReference = null,
-                ),
-            )
-            dao.upsertMeta(AppMetaEntity(MetaLoggedInPhone, ""))
+        db {
+            if (dao.countDoctors() > 0) return@db
+            database.runInTransaction {
+                dao.insertDoctors(seedDoctors())
+                dao.insertPatients(seedPatients())
+                dao.insertSlots(seedSlots())
+                dao.insertAppointments(seedAppointments())
+                dao.insertChatMessages(seedChatMessages())
+                dao.insertDoctorNotices(seedDoctorNotices())
+                dao.insertIvrPlans(seedIvrPlans())
+                dao.upsertCollaboration(CollaborationEntity(id = "default", connected = false, groupName = "New Mothers Group"))
+                dao.upsertGoogleReview(
+                    GoogleReviewEntity(
+                        id = "default",
+                        requested = true,
+                        submitted = false,
+                        rating = null,
+                        comment = "",
+                        moderationReference = null,
+                    ),
+                )
+                dao.upsertMeta(AppMetaEntity(MetaLoggedInPhone, ""))
+            }
         }
     }
 
@@ -490,7 +502,7 @@ class SqliteSchedulaRepository(
     }
 
     override suspend fun setLoggedInPhone(phone: String?) {
-        dao.upsertMeta(AppMetaEntity(MetaLoggedInPhone, phone.orEmpty()))
+        db { dao.upsertMeta(AppMetaEntity(MetaLoggedInPhone, phone.orEmpty())) }
     }
 
     override fun observeDoctors(query: String): Flow<List<Doctor>> {
@@ -511,7 +523,7 @@ class SqliteSchedulaRepository(
     }
 
     override suspend fun getNextAvailableSlot(doctorId: String): Slot? {
-        return dao.getNextAvailableSlot(doctorId)?.toModel()
+        return db { dao.getNextAvailableSlot(doctorId)?.toModel() }
     }
 
     override fun observePatients(): Flow<List<Patient>> {
@@ -523,12 +535,14 @@ class SqliteSchedulaRepository(
     }
 
     override suspend fun addOrUpdatePatient(patient: Patient) {
-        dao.insertPatient(patient.toEntity())
+        db { dao.insertPatient(patient.toEntity()) }
     }
 
     override suspend fun setPatientInvite(patientId: String, invited: Boolean) {
-        val current = dao.getPatient(patientId) ?: return
-        dao.updatePatient(current.copy(invited = invited))
+        db {
+            val current = dao.getPatient(patientId) ?: return@db
+            dao.updatePatient(current.copy(invited = invited))
+        }
     }
 
     override fun observeAppointments(): Flow<List<Appointment>> {
@@ -546,178 +560,192 @@ class SqliteSchedulaRepository(
         appointmentType: AppointmentType,
         channel: String,
     ): BookingResult {
-        val doctor = dao.getDoctor(doctorId) ?: return BookingResult.Error("Doctor not found")
-        val patient = dao.getPatient(patientId) ?: return BookingResult.Error("Patient not found")
-        val slot = dao.getSlot(slotId) ?: return BookingResult.Error("Slot not found")
-        if (slot.isBooked) return BookingResult.SlotUnavailable("Selected slot is no longer available")
-        if (slot.type != appointmentType.name) {
-            return BookingResult.Error("Selected slot does not support ${appointmentType.name.lowercase()} appointments.")
-        }
+        return db {
+            val doctor = dao.getDoctor(doctorId) ?: return@db BookingResult.Error("Doctor not found")
+            val patient = dao.getPatient(patientId) ?: return@db BookingResult.Error("Patient not found")
+            val slot = dao.getSlot(slotId) ?: return@db BookingResult.Error("Slot not found")
+            if (slot.isBooked) return@db BookingResult.SlotUnavailable("Selected slot is no longer available")
+            if (slot.type != appointmentType.name) {
+                return@db BookingResult.Error("Selected slot does not support ${appointmentType.name.lowercase()} appointments.")
+            }
 
-        when (val availability = schedulingApi.checkSlotAvailability(doctorId = doctor.id, slotId = slot.id)) {
-            is ApiResult.Error -> return BookingResult.Error(availability.message)
-            is ApiResult.Success -> {
-                if (!availability.data.available) {
-                    return BookingResult.SlotUnavailable(availability.data.reason ?: "Slot is unavailable")
+            when (val availability = schedulingApi.checkSlotAvailability(doctorId = doctor.id, slotId = slot.id)) {
+                is ApiResult.Error -> return@db BookingResult.Error(availability.message)
+                is ApiResult.Success -> {
+                    if (!availability.data.available) {
+                        return@db BookingResult.SlotUnavailable(availability.data.reason ?: "Slot is unavailable")
+                    }
                 }
             }
-        }
 
-        val confirmation = when (
-            val response = schedulingApi.confirmBooking(
-                doctorId = doctor.id,
-                patientId = patient.id,
-                slotId = slot.id,
-                channel = channel,
-            )
-        ) {
-            is ApiResult.Error -> return BookingResult.Error(response.message)
-            is ApiResult.Success -> response.data
-        }
-
-        val appointmentId = "appointment-${System.currentTimeMillis()}"
-        val token = (dao.maxToken() ?: 0) + 1
-
-        database.runInTransaction {
-            dao.setSlotBooked(slot.id, true)
-            dao.insertAppointment(
-                AppointmentEntity(
-                    id = appointmentId,
+            val confirmation = when (
+                val response = schedulingApi.confirmBooking(
                     doctorId = doctor.id,
                     patientId = patient.id,
                     slotId = slot.id,
-                    tokenNumber = token,
                     channel = channel,
-                    complaint = patient.complaint,
-                    status = AppointmentStatus.Scheduled.name,
-                    type = appointmentType.name,
-                    paymentStatus = PaymentStatus.Unpaid.name,
-                    confirmationCode = confirmation.confirmationCode,
-                    paymentReference = null,
-                    report = "",
-                    followUpRequested = false,
-                    consultingFeedback = null,
-                    hospitalFeedback = null,
-                    waitingTimeFeedback = null,
-                    createdAtEpochMillis = System.currentTimeMillis(),
-                ),
-            )
-            dao.insertChatMessage(
-                ChatMessageEntity(
-                    id = "chat-${System.currentTimeMillis()}",
-                    threadType = ChatThreadType.Patient.name,
-                    sender = ChatSender.System.name,
-                    content = "Appointment confirmed for ${patient.name}. Confirmation: ${confirmation.confirmationCode}.",
-                    createdAtEpochMillis = System.currentTimeMillis(),
-                ),
-            )
-        }
+                )
+            ) {
+                is ApiResult.Error -> return@db BookingResult.Error(response.message)
+                is ApiResult.Success -> response.data
+            }
 
-        val booked = dao.getAppointmentRecord(appointmentId)?.toModel()
-            ?: return BookingResult.Error("Unable to load booked appointment")
-        return BookingResult.Success(booked)
+            val appointmentId = "appointment-${System.currentTimeMillis()}"
+            val token = (dao.maxToken() ?: 0) + 1
+
+            database.runInTransaction {
+                dao.setSlotBooked(slot.id, true)
+                dao.insertAppointment(
+                    AppointmentEntity(
+                        id = appointmentId,
+                        doctorId = doctor.id,
+                        patientId = patient.id,
+                        slotId = slot.id,
+                        tokenNumber = token,
+                        channel = channel,
+                        complaint = patient.complaint,
+                        status = AppointmentStatus.Scheduled.name,
+                        type = appointmentType.name,
+                        paymentStatus = PaymentStatus.Unpaid.name,
+                        confirmationCode = confirmation.confirmationCode,
+                        paymentReference = null,
+                        report = "",
+                        followUpRequested = false,
+                        consultingFeedback = null,
+                        hospitalFeedback = null,
+                        waitingTimeFeedback = null,
+                        createdAtEpochMillis = System.currentTimeMillis(),
+                    ),
+                )
+                dao.insertChatMessage(
+                    ChatMessageEntity(
+                        id = "chat-${System.currentTimeMillis()}",
+                        threadType = ChatThreadType.Patient.name,
+                        sender = ChatSender.System.name,
+                        content = "Appointment confirmed for ${patient.name}. Confirmation: ${confirmation.confirmationCode}.",
+                        createdAtEpochMillis = System.currentTimeMillis(),
+                    ),
+                )
+            }
+
+            val booked = dao.getAppointmentRecord(appointmentId)?.toModel()
+                ?: return@db BookingResult.Error("Unable to load booked appointment")
+            return@db BookingResult.Success(booked)
+        }
     }
 
     override suspend fun cancelAppointment(appointmentId: String) {
-        val current = dao.getAppointment(appointmentId) ?: return
-        database.runInTransaction {
-            dao.setSlotBooked(current.slotId, false)
-            dao.updateAppointment(
-                current.copy(
-                    status = AppointmentStatus.Cancelled.name,
-                    createdAtEpochMillis = System.currentTimeMillis(),
-                ),
-            )
+        db {
+            val current = dao.getAppointment(appointmentId) ?: return@db
+            database.runInTransaction {
+                dao.setSlotBooked(current.slotId, false)
+                dao.updateAppointment(
+                    current.copy(
+                        status = AppointmentStatus.Cancelled.name,
+                        createdAtEpochMillis = System.currentTimeMillis(),
+                    ),
+                )
+            }
         }
     }
 
     override suspend fun rescheduleAppointment(appointmentId: String, newSlotId: String): BookingResult {
-        val current = dao.getAppointment(appointmentId) ?: return BookingResult.Error("Appointment not found")
-        val newSlot = dao.getSlot(newSlotId) ?: return BookingResult.Error("Slot not found")
-        if (newSlot.isBooked) return BookingResult.SlotUnavailable("Reschedule failed. Slot already booked")
-        if (newSlot.type != current.type) {
-            return BookingResult.Error("Please select a ${current.type.lowercase()} slot for this appointment.")
-        }
+        return db {
+            val current = dao.getAppointment(appointmentId) ?: return@db BookingResult.Error("Appointment not found")
+            val newSlot = dao.getSlot(newSlotId) ?: return@db BookingResult.Error("Slot not found")
+            if (newSlot.isBooked) return@db BookingResult.SlotUnavailable("Reschedule failed. Slot already booked")
+            if (newSlot.type != current.type) {
+                return@db BookingResult.Error("Please select a ${current.type.lowercase()} slot for this appointment.")
+            }
 
-        when (val availability = schedulingApi.checkSlotAvailability(current.doctorId, newSlot.id)) {
-            is ApiResult.Error -> return BookingResult.Error(availability.message)
-            is ApiResult.Success -> {
-                if (!availability.data.available) {
-                    return BookingResult.SlotUnavailable(availability.data.reason ?: "Selected slot is not available")
+            when (val availability = schedulingApi.checkSlotAvailability(current.doctorId, newSlot.id)) {
+                is ApiResult.Error -> return@db BookingResult.Error(availability.message)
+                is ApiResult.Success -> {
+                    if (!availability.data.available) {
+                        return@db BookingResult.SlotUnavailable(availability.data.reason ?: "Selected slot is not available")
+                    }
                 }
             }
-        }
-        val confirmation = when (val response = schedulingApi.confirmReschedule(appointmentId, newSlot.id)) {
-            is ApiResult.Error -> return BookingResult.Error(response.message)
-            is ApiResult.Success -> response.data
-        }
+            val confirmation = when (val response = schedulingApi.confirmReschedule(appointmentId, newSlot.id)) {
+                is ApiResult.Error -> return@db BookingResult.Error(response.message)
+                is ApiResult.Success -> response.data
+            }
 
-        database.runInTransaction {
-            dao.setSlotBooked(current.slotId, false)
-            dao.setSlotBooked(newSlot.id, true)
+            database.runInTransaction {
+                dao.setSlotBooked(current.slotId, false)
+                dao.setSlotBooked(newSlot.id, true)
+                dao.updateAppointment(
+                    current.copy(
+                        slotId = newSlot.id,
+                        status = AppointmentStatus.Rescheduled.name,
+                        confirmationCode = confirmation.confirmationCode,
+                        createdAtEpochMillis = System.currentTimeMillis(),
+                    ),
+                )
+            }
+
+            val updated = dao.getAppointmentRecord(appointmentId)?.toModel()
+                ?: return@db BookingResult.Error("Unable to reload appointment")
+            return@db BookingResult.Success(updated)
+        }
+    }
+
+    override suspend fun markPaymentPaid(appointmentId: String): OperationResult {
+        return db {
+            val current = dao.getAppointment(appointmentId) ?: return@db OperationResult.Error("Appointment not found")
+            val appointmentRecord = dao.getAppointmentRecord(appointmentId)
+                ?: return@db OperationResult.Error("Appointment data not found")
+            if (current.paymentStatus == PaymentStatus.Paid.name) {
+                return@db OperationResult.Success("Payment already completed")
+            }
+
+            val payment = when (
+                val response = billingApi.capturePayment(
+                    appointmentId = appointmentId,
+                    amount = appointmentRecord.doctor.consultationFee,
+                )
+            ) {
+                is ApiResult.Error -> return@db OperationResult.Error(response.message)
+                is ApiResult.Success -> response.data
+            }
+
             dao.updateAppointment(
                 current.copy(
-                    slotId = newSlot.id,
-                    status = AppointmentStatus.Rescheduled.name,
-                    confirmationCode = confirmation.confirmationCode,
+                    paymentStatus = PaymentStatus.Paid.name,
+                    paymentReference = payment.paymentReference,
+                    createdAtEpochMillis = System.currentTimeMillis(),
+                ),
+            )
+            return@db OperationResult.Success("Payment confirmed (${payment.paymentReference})")
+        }
+    }
+
+    override suspend fun saveAppointmentReport(appointmentId: String, report: String) {
+        db {
+            val current = dao.getAppointment(appointmentId) ?: return@db
+            dao.updateAppointment(current.copy(report = report, createdAtEpochMillis = System.currentTimeMillis()))
+        }
+    }
+
+    override suspend fun setFollowUpRequested(appointmentId: String, requested: Boolean) {
+        db {
+            val current = dao.getAppointment(appointmentId) ?: return@db
+            dao.updateAppointment(current.copy(followUpRequested = requested, createdAtEpochMillis = System.currentTimeMillis()))
+        }
+    }
+
+    override suspend fun submitConsultingFeedback(appointmentId: String, consulting: Int, hospital: Int, waiting: Int) {
+        db {
+            val current = dao.getAppointment(appointmentId) ?: return@db
+            dao.updateAppointment(
+                current.copy(
+                    consultingFeedback = consulting,
+                    hospitalFeedback = hospital,
+                    waitingTimeFeedback = waiting,
                     createdAtEpochMillis = System.currentTimeMillis(),
                 ),
             )
         }
-
-        val updated = dao.getAppointmentRecord(appointmentId)?.toModel()
-            ?: return BookingResult.Error("Unable to reload appointment")
-        return BookingResult.Success(updated)
-    }
-
-    override suspend fun markPaymentPaid(appointmentId: String): OperationResult {
-        val current = dao.getAppointment(appointmentId) ?: return OperationResult.Error("Appointment not found")
-        val appointmentRecord = dao.getAppointmentRecord(appointmentId)
-            ?: return OperationResult.Error("Appointment data not found")
-        if (current.paymentStatus == PaymentStatus.Paid.name) {
-            return OperationResult.Success("Payment already completed")
-        }
-
-        val payment = when (
-            val response = billingApi.capturePayment(
-                appointmentId = appointmentId,
-                amount = appointmentRecord.doctor.consultationFee,
-            )
-        ) {
-            is ApiResult.Error -> return OperationResult.Error(response.message)
-            is ApiResult.Success -> response.data
-        }
-
-        dao.updateAppointment(
-            current.copy(
-                paymentStatus = PaymentStatus.Paid.name,
-                paymentReference = payment.paymentReference,
-                createdAtEpochMillis = System.currentTimeMillis(),
-            ),
-        )
-        return OperationResult.Success("Payment confirmed (${payment.paymentReference})")
-    }
-
-    override suspend fun saveAppointmentReport(appointmentId: String, report: String) {
-        val current = dao.getAppointment(appointmentId) ?: return
-        dao.updateAppointment(current.copy(report = report, createdAtEpochMillis = System.currentTimeMillis()))
-    }
-
-    override suspend fun setFollowUpRequested(appointmentId: String, requested: Boolean) {
-        val current = dao.getAppointment(appointmentId) ?: return
-        dao.updateAppointment(current.copy(followUpRequested = requested, createdAtEpochMillis = System.currentTimeMillis()))
-    }
-
-    override suspend fun submitConsultingFeedback(appointmentId: String, consulting: Int, hospital: Int, waiting: Int) {
-        val current = dao.getAppointment(appointmentId) ?: return
-        dao.updateAppointment(
-            current.copy(
-                consultingFeedback = consulting,
-                hospitalFeedback = hospital,
-                waitingTimeFeedback = waiting,
-                createdAtEpochMillis = System.currentTimeMillis(),
-            ),
-        )
     }
 
     override fun observeReminders(): Flow<List<ReminderItem>> {
@@ -749,8 +777,10 @@ class SqliteSchedulaRepository(
     }
 
     override suspend fun resolveDoctorNotice(noticeId: String) {
-        val current = dao.getDoctorNotice(noticeId) ?: return
-        dao.updateDoctorNotice(current.copy(resolved = true))
+        db {
+            val current = dao.getDoctorNotice(noticeId) ?: return@db
+            dao.updateDoctorNotice(current.copy(resolved = true))
+        }
     }
 
     override fun observeChat(threadType: ChatThreadType): Flow<List<ChatMessage>> {
@@ -758,16 +788,18 @@ class SqliteSchedulaRepository(
     }
 
     override suspend fun sendChatMessage(threadType: ChatThreadType, sender: ChatSender, content: String) {
-        if (content.isBlank()) return
-        dao.insertChatMessage(
-            ChatMessageEntity(
-                id = "chat-${System.currentTimeMillis()}",
-                threadType = threadType.name,
-                sender = sender.name,
-                content = content.trim(),
-                createdAtEpochMillis = System.currentTimeMillis(),
-            ),
-        )
+        db {
+            if (content.isBlank()) return@db
+            dao.insertChatMessage(
+                ChatMessageEntity(
+                    id = "chat-${System.currentTimeMillis()}",
+                    threadType = threadType.name,
+                    sender = sender.name,
+                    content = content.trim(),
+                    createdAtEpochMillis = System.currentTimeMillis(),
+                ),
+            )
+        }
     }
 
     override fun observeSupportTickets(): Flow<List<SupportTicket>> {
@@ -775,29 +807,35 @@ class SqliteSchedulaRepository(
     }
 
     override suspend fun createSupportTicket(subject: String, message: String): OperationResult {
-        if (subject.isBlank() || message.isBlank()) return OperationResult.Error("Subject and message are required")
-        val ack = when (val response = supportApi.acknowledgeTicket(subject.trim(), message.trim())) {
-            is ApiResult.Error -> return OperationResult.Error(response.message)
-            is ApiResult.Success -> response.data
-        }
+        return db {
+            if (subject.isBlank() || message.isBlank()) return@db OperationResult.Error("Subject and message are required")
+            val ack = when (val response = supportApi.acknowledgeTicket(subject.trim(), message.trim())) {
+                is ApiResult.Error -> return@db OperationResult.Error(response.message)
+                is ApiResult.Success -> response.data
+            }
 
-        dao.insertSupportTicket(
-            SupportTicketEntity(
-                id = "ticket-${System.currentTimeMillis()}",
-                subject = subject.trim(),
-                message = message.trim(),
-                status = SupportTicketStatus.Open.name,
-                externalReference = ack.externalReference,
-                estimatedResolutionHours = ack.estimatedResolutionHours,
-                createdAtEpochMillis = System.currentTimeMillis(),
-            ),
-        )
-        sendChatMessage(
-            ChatThreadType.Support,
-            ChatSender.Support,
-            "Support ticket created: ${subject.trim()} (${ack.externalReference}), ETA ${ack.estimatedResolutionHours}h",
-        )
-        return OperationResult.Success("Support ticket created (${ack.externalReference})")
+            dao.insertSupportTicket(
+                SupportTicketEntity(
+                    id = "ticket-${System.currentTimeMillis()}",
+                    subject = subject.trim(),
+                    message = message.trim(),
+                    status = SupportTicketStatus.Open.name,
+                    externalReference = ack.externalReference,
+                    estimatedResolutionHours = ack.estimatedResolutionHours,
+                    createdAtEpochMillis = System.currentTimeMillis(),
+                ),
+            )
+            dao.insertChatMessage(
+                ChatMessageEntity(
+                    id = "chat-${System.currentTimeMillis()}",
+                    threadType = ChatThreadType.Support.name,
+                    sender = ChatSender.Support.name,
+                    content = "Support ticket created: ${subject.trim()} (${ack.externalReference}), ETA ${ack.estimatedResolutionHours}h",
+                    createdAtEpochMillis = System.currentTimeMillis(),
+                ),
+            )
+            return@db OperationResult.Success("Support ticket created (${ack.externalReference})")
+        }
     }
 
     override fun observeIvrPlans(): Flow<List<IvrPlan>> {
@@ -805,28 +843,38 @@ class SqliteSchedulaRepository(
     }
 
     override suspend fun upsertIvrPlan(plan: IvrPlan) {
-        dao.upsertIvrPlan(plan.toEntity())
+        db { dao.upsertIvrPlan(plan.toEntity()) }
     }
 
     override suspend fun confirmIvrPlan(planId: String): BookingResult {
-        val plan = dao.getIvrPlan(planId) ?: return BookingResult.Error("IVR plan not found")
-        val slot = dao.getSlot(plan.slotId) ?: return BookingResult.Error("IVR slot not found")
-        val confirmed = plan.copy(paymentConfirmed = true, status = IvrPlanStatus.Confirmed.name)
-        dao.upsertIvrPlan(confirmed)
+        val confirmed = db {
+            val plan = dao.getIvrPlan(planId) ?: return@db null
+            val slot = dao.getSlot(plan.slotId) ?: return@db null
+            val updated = plan.copy(
+                paymentConfirmed = true,
+                status = IvrPlanStatus.Confirmed.name,
+                convertedAppointmentId = null,
+            )
+            dao.upsertIvrPlan(updated)
+            updated to slot
+        } ?: return BookingResult.Error("IVR plan not found")
+
         val booking = bookAppointment(
-            doctorId = confirmed.doctorId,
-            patientId = confirmed.patientId,
-            slotId = confirmed.slotId,
-            appointmentType = AppointmentType.valueOf(slot.type),
+            doctorId = confirmed.first.doctorId,
+            patientId = confirmed.first.patientId,
+            slotId = confirmed.first.slotId,
+            appointmentType = AppointmentType.valueOf(confirmed.second.type),
             channel = "IVR",
         )
         if (booking is BookingResult.Success) {
-            dao.upsertIvrPlan(
-                confirmed.copy(
-                    status = IvrPlanStatus.Converted.name,
-                    convertedAppointmentId = booking.appointment.id,
-                ),
-            )
+            db {
+                dao.upsertIvrPlan(
+                    confirmed.first.copy(
+                        status = IvrPlanStatus.Converted.name,
+                        convertedAppointmentId = booking.appointment.id,
+                    ),
+                )
+            }
         }
         return booking
     }
@@ -838,7 +886,7 @@ class SqliteSchedulaRepository(
     }
 
     override suspend fun setCollaborationConnected(connected: Boolean) {
-        dao.upsertCollaboration(CollaborationEntity(id = "default", connected = connected, groupName = "New Mothers Group"))
+        db { dao.upsertCollaboration(CollaborationEntity(id = "default", connected = connected, groupName = "New Mothers Group")) }
     }
 
     override fun observeGoogleReviewState(): Flow<GoogleReviewState> {
@@ -855,21 +903,23 @@ class SqliteSchedulaRepository(
     }
 
     override suspend fun submitGoogleReview(rating: Int, comment: String): OperationResult {
-        val reviewAck = when (val response = reviewApi.submitReview(rating, comment)) {
-            is ApiResult.Error -> return OperationResult.Error(response.message)
-            is ApiResult.Success -> response.data
+        return db {
+            val reviewAck = when (val response = reviewApi.submitReview(rating, comment)) {
+                is ApiResult.Error -> return@db OperationResult.Error(response.message)
+                is ApiResult.Success -> response.data
+            }
+            dao.upsertGoogleReview(
+                GoogleReviewEntity(
+                    id = "default",
+                    requested = true,
+                    submitted = true,
+                    rating = rating,
+                    comment = comment,
+                    moderationReference = reviewAck.moderationReference,
+                ),
+            )
+            return@db OperationResult.Success("Review submitted (${reviewAck.moderationReference})")
         }
-        dao.upsertGoogleReview(
-            GoogleReviewEntity(
-                id = "default",
-                requested = true,
-                submitted = true,
-                rating = rating,
-                comment = comment,
-                moderationReference = reviewAck.moderationReference,
-            ),
-        )
-        return OperationResult.Success("Review submitted (${reviewAck.moderationReference})")
     }
 
     private fun seedDoctors(): List<DoctorEntity> {

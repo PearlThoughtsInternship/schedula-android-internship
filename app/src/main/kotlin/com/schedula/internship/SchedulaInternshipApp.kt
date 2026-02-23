@@ -320,7 +320,7 @@ fun SchedulaInternshipApp(
 }
 
 @Composable
-private fun AppShell(
+internal fun AppShell(
     snackbarHostState: SnackbarHostState,
     uiState: com.schedula.internship.ui.AppUiState,
     onTab: (BottomTab) -> Unit,
@@ -365,7 +365,7 @@ private fun AppShell(
 }
 
 @Composable
-private fun LoginScreen(
+internal fun LoginScreen(
     phone: String,
     otp: String,
     otpSent: Boolean,
@@ -401,7 +401,7 @@ private fun LoginScreen(
 }
 
 @Composable
-private fun DoctorSearchScreen(
+internal fun DoctorSearchScreen(
     query: String,
     doctors: List<Doctor>,
     onQueryChange: (String) -> Unit,
@@ -436,7 +436,7 @@ private fun DoctorSearchScreen(
 }
 
 @Composable
-private fun DoctorProfileScreen(doctor: Doctor?, onBook: () -> Unit, onBack: () -> Unit) {
+internal fun DoctorProfileScreen(doctor: Doctor?, onBook: () -> Unit, onBack: () -> Unit) {
     if (doctor == null) {
         CenterMessage("Doctor not found")
         return
@@ -455,7 +455,7 @@ private fun DoctorProfileScreen(doctor: Doctor?, onBook: () -> Unit, onBack: () 
 }
 
 @Composable
-private fun BookingDateScreen(
+internal fun BookingDateScreen(
     doctor: Doctor?,
     dateOptions: List<String>,
     selectedDate: String,
@@ -492,7 +492,7 @@ private fun BookingDateScreen(
 }
 
 @Composable
-private fun BookingTimeScreen(
+internal fun BookingTimeScreen(
     doctor: Doctor?,
     slots: List<Slot>,
     selectedSlotId: String?,
@@ -529,7 +529,7 @@ private fun BookingTimeScreen(
 }
 
 @Composable
-private fun AddPatientScreen(
+internal fun AddPatientScreen(
     patients: List<Patient>,
     selectedPatient: String,
     onPatientSelected: (String) -> Unit,
@@ -573,7 +573,7 @@ private fun AddPatientScreen(
 }
 
 @Composable
-private fun BookingConfirmationScreen(
+internal fun BookingConfirmationScreen(
     appointment: Appointment?,
     onAddPatientDetails: () -> Unit,
     onViewAppointments: () -> Unit,
@@ -598,7 +598,7 @@ private fun BookingConfirmationScreen(
 }
 
 @Composable
-private fun BookingFailedScreen(onRetry: () -> Unit, onBookNext: () -> Unit, onMyAppointments: () -> Unit) {
+internal fun BookingFailedScreen(onRetry: () -> Unit, onBookNext: () -> Unit, onMyAppointments: () -> Unit) {
     Column(modifier = Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.Center) {
         Text("Unable to book", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
         Text("Selected slot is no longer available.")
@@ -612,7 +612,7 @@ private fun BookingFailedScreen(onRetry: () -> Unit, onBookNext: () -> Unit, onM
 }
 
 @Composable
-private fun PatientDetailsScreen(
+internal fun PatientDetailsScreen(
     appointment: Appointment?,
     patient: Patient?,
     onPay: () -> Unit,
@@ -652,7 +652,7 @@ private fun PatientDetailsScreen(
 }
 
 @Composable
-private fun ChatScreen(
+internal fun ChatScreen(
     title: String,
     messages: List<ChatMessage>,
     onSend: (String) -> Unit,
@@ -682,7 +682,7 @@ private fun ChatScreen(
 }
 
 @Composable
-private fun MyAppointmentsScreen(
+internal fun MyAppointmentsScreen(
     appointments: List<Appointment>,
     onOpenDetails: (String) -> Unit,
 ) {
@@ -717,7 +717,7 @@ private fun MyAppointmentsScreen(
 }
 
 @Composable
-private fun AppointmentDetailsScreen(
+internal fun AppointmentDetailsScreen(
     appointment: Appointment?,
     onCancel: () -> Unit,
     onReschedule: () -> Unit,
@@ -754,7 +754,7 @@ private fun AppointmentDetailsScreen(
 }
 
 @Composable
-private fun AppointmentCancelScreen(
+internal fun AppointmentCancelScreen(
     appointment: Appointment?,
     onConfirm: () -> Unit,
     onBack: () -> Unit,
@@ -770,7 +770,7 @@ private fun AppointmentCancelScreen(
 }
 
 @Composable
-private fun AppointmentRescheduleScreen(
+internal fun AppointmentRescheduleScreen(
     dateOptions: List<String>,
     selectedDate: String,
     slots: List<Slot>,
@@ -813,7 +813,7 @@ private fun AppointmentRescheduleScreen(
 }
 
 @Composable
-private fun ConsultingFeedbackScreen(onDone: (Int, Int, Int) -> Unit) {
+internal fun ConsultingFeedbackScreen(onDone: (Int, Int, Int) -> Unit) {
     var consulting by rememberSaveable { mutableIntStateOf(4) }
     var hospital by rememberSaveable { mutableIntStateOf(4) }
     var waiting by rememberSaveable { mutableIntStateOf(4) }
@@ -831,7 +831,7 @@ private fun ConsultingFeedbackScreen(onDone: (Int, Int, Int) -> Unit) {
 }
 
 @Composable
-private fun RatingRow(label: String, value: Int, onChange: (Int) -> Unit) {
+internal fun RatingRow(label: String, value: Int, onChange: (Int) -> Unit) {
     Column(modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
         Text("$label: $value/5")
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -843,7 +843,7 @@ private fun RatingRow(label: String, value: Int, onChange: (Int) -> Unit) {
 }
 
 @Composable
-private fun RemindersScreen(
+internal fun RemindersScreen(
     reminders: List<ReminderItem>,
     onOpenAppointment: (String?) -> Unit,
     onBack: () -> Unit,
@@ -873,7 +873,7 @@ private fun RemindersScreen(
 }
 
 @Composable
-private fun RescheduleByDoctorScreen(
+internal fun RescheduleByDoctorScreen(
     notices: List<DoctorNotice>,
     onApply: (String) -> Unit,
     onDismiss: (String) -> Unit,
@@ -901,7 +901,7 @@ private fun RescheduleByDoctorScreen(
 }
 
 @Composable
-private fun SeamlessAppointmentScreen(
+internal fun SeamlessAppointmentScreen(
     doctors: List<Doctor>,
     patients: List<Patient>,
     dateOptions: List<String>,
@@ -1006,7 +1006,7 @@ private fun SeamlessAppointmentScreen(
 }
 
 @Composable
-private fun CopatientCollabScreen(
+internal fun CopatientCollabScreen(
     state: CollaborationState,
     messages: List<ChatMessage>,
     onConnectChange: (Boolean) -> Unit,
@@ -1046,7 +1046,7 @@ private fun CopatientCollabScreen(
 }
 
 @Composable
-private fun SupportScreen(
+internal fun SupportScreen(
     tickets: List<SupportTicket>,
     messages: List<ChatMessage>,
     onCreateTicket: (String, String) -> Unit,
@@ -1110,7 +1110,7 @@ private fun SupportScreen(
 }
 
 @Composable
-private fun FriendsFamilyScreen(
+internal fun FriendsFamilyScreen(
     patients: List<Patient>,
     onToggleInvite: (String, Boolean) -> Unit,
     onBack: () -> Unit,
@@ -1135,7 +1135,7 @@ private fun FriendsFamilyScreen(
 }
 
 @Composable
-private fun GoogleReviewScreen(
+internal fun GoogleReviewScreen(
     state: GoogleReviewState,
     onSubmit: (Int, String) -> Unit,
     onBack: () -> Unit,
@@ -1158,7 +1158,7 @@ private fun GoogleReviewScreen(
 }
 
 @Composable
-private fun CenterMessage(message: String) {
+internal fun CenterMessage(message: String) {
     Column(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.Center) {
         Text(message, modifier = Modifier.padding(24.dp))
     }
