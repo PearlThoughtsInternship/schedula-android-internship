@@ -12,6 +12,11 @@ enum class AppointmentType {
     Regular,
 }
 
+enum class PaymentStatus {
+    Unpaid,
+    Paid,
+}
+
 data class Appointment(
     val id: String,
     val doctorId: String,
@@ -30,4 +35,10 @@ data class Appointment(
     val complaint: String?,
     val status: AppointmentStatus,
     val type: AppointmentType,
+    val paymentStatus: PaymentStatus,
+    val report: String,
+    val followUpRequested: Boolean,
+    val consultingFeedback: Int?,
+    val hospitalFeedback: Int?,
+    val waitingTimeFeedback: Int?,
 )

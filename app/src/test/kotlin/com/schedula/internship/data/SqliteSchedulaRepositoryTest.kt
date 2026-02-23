@@ -5,6 +5,10 @@ import androidx.test.core.app.ApplicationProvider
 import com.google.common.truth.Truth.assertThat
 import com.schedula.internship.model.AppointmentStatus
 import com.schedula.internship.model.AppointmentType
+import com.schedula.internship.model.ChatSender
+import com.schedula.internship.model.ChatThreadType
+import com.schedula.internship.model.IvrPlanStatus
+import com.schedula.internship.model.PaymentStatus
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import org.junit.After
@@ -162,5 +166,88 @@ class SqliteSchedulaRepositoryTest {
         repository.setLoggedInPhone(null)
         val loggedOut = repository.observeLoggedInPhone().first()
         assertThat(loggedOut).isNull()
+    }
+
+    @Test
+    fun paymentReportFollowUpAndFeedbackPersistOnAppointment() = runTest {
+        repository.ensureSeeded()
+
+        val slot = repository.observeSlots("doctor-kumar", "Next available day").first().first { !it.isBooked }
+        val booked = repository.bookAppointment(
+            doctorId = "doctor-kumar",
+            patientId = "patient-self",
+            slotId = slot.id,
+            appointmentType = AppointmentType.Regular,
+            channel = "APP",
+        ) as BookingResult.Success
+
+        repository.markPaymentPaid(booked.appointment.id)
+        repository.saveAppointmentReport(booked.appointment.id, "Vitals stable")
+        repository.setFollowUpRequested(booked.appointment.id, true)
+        repository.submitConsultingFeedback(booked.appointment.id, consulting = 5, hospital = 4, waiting = 3)
+
+        val updated = repository.observeAppointment(booked.appointment.id).first()
+        assertThat(updated?.paymentStatus).isEqualTo(PaymentStatus.Paid)
+        assertThat(updated?.report).isEqualTo("Vitals stable")
+        assertThat(updated?.followUpRequested).isTrue()
+        assertThat(updated?.consultingFeedback).isEqualTo(5)
+        assertThat(updated?.hospitalFeedback).isEqualTo(4)
+        assertThat(updated?.waitingTimeFeedback).isEqualTo(3)
+    }
+
+    @Test
+    fun supportTicketAndChatAreStored() = runTest {
+        repository.ensureSeeded()
+
+        repository.createSupportTicket("Payment issue", "Unable to complete payment")
+        repository.sendChatMessage(ChatThreadType.Support, ChatSender.User, "Need help quickly")
+
+        val tickets = repository.observeSupportTickets().first()
+        val supportChat = repository.observeChat(ChatThreadType.Support).first()
+
+        assertThat(tickets).isNotEmpty()
+        assertThat(tickets.first().subject).isEqualTo("Payment issue")
+        assertThat(supportChat.last().content).contains("Need help quickly")
+    }
+
+    @Test
+    fun ivrPlanCanBeConfirmedAndConverted() = runTest {
+        repository.ensureSeeded()
+
+        val plan = repository.observeIvrPlans().first().first()
+        val result = repository.confirmIvrPlan(plan.id)
+        assertThat(result).isInstanceOf(BookingResult.Success::class.java)
+
+        val updatedPlan = repository.observeIvrPlans().first().first { it.id == plan.id }
+        assertThat(updatedPlan.status).isEqualTo(IvrPlanStatus.Converted)
+    }
+
+    @Test
+    fun inviteAndReviewAndCollaborationPersist() = runTest {
+        repository.ensureSeeded()
+
+        repository.setPatientInvite("patient-meena", true)
+        repository.setCollaborationConnected(true)
+        repository.submitGoogleReview(rating = 5, comment = "Excellent consultation")
+
+        val meena = repository.observePatient("patient-meena").first()
+        val collaboration = repository.observeCollaborationState().first()
+        val review = repository.observeGoogleReviewState().first()
+
+        assertThat(meena?.invited).isTrue()
+        assertThat(collaboration.connected).isTrue()
+        assertThat(review.submitted).isTrue()
+        assertThat(review.rating).isEqualTo(5)
+    }
+
+    @Test
+    fun remindersContainAppointmentsAndDoctorNotices() = runTest {
+        repository.ensureSeeded()
+
+        val reminders = repository.observeReminders().first()
+
+        assertThat(reminders).isNotEmpty()
+        assertThat(reminders.any { it.id.startsWith("reminder-appt-") }).isTrue()
+        assertThat(reminders.any { it.id.startsWith("reminder-notice-") }).isTrue()
     }
 }

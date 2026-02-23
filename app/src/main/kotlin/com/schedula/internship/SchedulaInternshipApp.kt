@@ -19,7 +19,6 @@ import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
@@ -46,9 +45,19 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.schedula.internship.model.Appointment
 import com.schedula.internship.model.AppointmentStatus
 import com.schedula.internship.model.AppointmentType
+import com.schedula.internship.model.ChatMessage
+import com.schedula.internship.model.ChatSender
+import com.schedula.internship.model.CollaborationState
 import com.schedula.internship.model.Doctor
+import com.schedula.internship.model.DoctorNotice
+import com.schedula.internship.model.GoogleReviewState
+import com.schedula.internship.model.IvrPlan
+import com.schedula.internship.model.IvrPlanStatus
 import com.schedula.internship.model.Patient
+import com.schedula.internship.model.PaymentStatus
+import com.schedula.internship.model.ReminderItem
 import com.schedula.internship.model.Slot
+import com.schedula.internship.model.SupportTicket
 import com.schedula.internship.ui.AppViewModel
 import com.schedula.internship.ui.BottomTab
 import com.schedula.internship.ui.Screen
@@ -68,6 +77,17 @@ fun SchedulaInternshipApp(
     val selectedPatient by viewModel.selectedPatient.collectAsStateWithLifecycle()
     val selectedAppointment by viewModel.selectedAppointment.collectAsStateWithLifecycle()
     val appointments by viewModel.appointments.collectAsStateWithLifecycle()
+    val reminders by viewModel.reminders.collectAsStateWithLifecycle()
+    val doctorNotices by viewModel.doctorNotices.collectAsStateWithLifecycle()
+    val patientChat by viewModel.patientChat.collectAsStateWithLifecycle()
+    val reengagementChat by viewModel.reengagementChat.collectAsStateWithLifecycle()
+    val supportChat by viewModel.supportChat.collectAsStateWithLifecycle()
+    val copatientChat by viewModel.copatientChat.collectAsStateWithLifecycle()
+    val supportTickets by viewModel.supportTickets.collectAsStateWithLifecycle()
+    val ivrPlans by viewModel.ivrPlans.collectAsStateWithLifecycle()
+    val collaboration by viewModel.collaborationState.collectAsStateWithLifecycle()
+    val reviewState by viewModel.googleReviewState.collectAsStateWithLifecycle()
+
     val uiState = viewModel.uiState
 
     val snackbarHostState = remember { SnackbarHostState() }
@@ -116,16 +136,7 @@ fun SchedulaInternshipApp(
             onTab = viewModel::onBottomTab,
         ) {
             when (uiState.activeScreen) {
-                Screen.Login -> LoginScreen(
-                    phone = uiState.phoneNumber,
-                    otp = uiState.otp,
-                    otpSent = uiState.otpSent,
-                    error = uiState.authError,
-                    onPhoneChange = viewModel::updatePhoneNumber,
-                    onOtpChange = viewModel::updateOtp,
-                    onSendOtp = viewModel::sendOtp,
-                    onVerifyOtp = viewModel::verifyOtp,
-                )
+                Screen.Login -> Unit
 
                 Screen.DoctorSearch -> DoctorSearchScreen(
                     query = uiState.searchQuery,
@@ -147,6 +158,8 @@ fun SchedulaInternshipApp(
                     doctor = selectedDoctor,
                     dateOptions = dateOptions,
                     selectedDate = uiState.selectedDateLabel,
+                    selectedType = uiState.bookingType,
+                    onTypeChange = viewModel::selectBookingType,
                     onDateSelected = viewModel::selectDate,
                     onNext = viewModel::openBookingTime,
                     onBack = viewModel::backToDoctorSearch,
@@ -157,6 +170,7 @@ fun SchedulaInternshipApp(
                     slots = slots,
                     selectedSlotId = uiState.selectedSlotId,
                     onSlotClick = viewModel::selectSlot,
+                    onNextAvailable = viewModel::selectNextAvailableSlot,
                     onNext = viewModel::openAddPatientDetails,
                     onBack = viewModel::openBookingDate,
                 )
@@ -166,7 +180,7 @@ fun SchedulaInternshipApp(
                     selectedPatient = uiState.selectedPatientId,
                     onPatientSelected = viewModel::selectPatient,
                     onSave = viewModel::savePatient,
-                    onContinue = { viewModel.bookAppointment(AppointmentType.Regular) },
+                    onContinue = viewModel::bookAppointment,
                 )
 
                 Screen.BookingConfirmation -> BookingConfirmationScreen(
@@ -177,17 +191,26 @@ fun SchedulaInternshipApp(
 
                 Screen.BookingFailed -> BookingFailedScreen(
                     onRetry = viewModel::openBookingTime,
+                    onBookNext = viewModel::bookUsingNextAvailableSlot,
                     onMyAppointments = viewModel::openMyAppointments,
                 )
 
                 Screen.PatientDetails -> PatientDetailsScreen(
                     appointment = selectedAppointment,
                     patient = selectedPatient,
+                    onPay = viewModel::markPaymentPaid,
+                    onSaveReport = viewModel::saveReport,
+                    onFollowUp = viewModel::toggleFollowUp,
                     onChat = viewModel::openPatientChat,
                     onMyAppointments = viewModel::openMyAppointments,
                 )
 
-                Screen.PatientChat -> PatientChatScreen(onBack = viewModel::openPatientDetails)
+                Screen.PatientChat -> ChatScreen(
+                    title = "Patient chat",
+                    messages = patientChat,
+                    onSend = { viewModel.sendPatientChatMessage(it) },
+                    onBack = viewModel::openPatientDetails,
+                )
 
                 Screen.MyAppointments -> MyAppointmentsScreen(
                     appointments = appointments,
@@ -214,24 +237,62 @@ fun SchedulaInternshipApp(
                 )
 
                 Screen.ConsultingFeedback -> ConsultingFeedbackScreen(
-                    onDone = viewModel::openMyAppointments,
+                    onDone = viewModel::submitFeedback,
                 )
 
                 Screen.Reminders -> RemindersScreen(
-                    upcoming = viewModel.upcomingAppointments(),
+                    reminders = reminders,
+                    onOpenAppointment = { id -> id?.let(viewModel::openAppointmentDetails) },
                     onBack = viewModel::backToDoctorSearch,
                     onRescheduleByDoctor = viewModel::openRescheduleByDoctor,
                 )
 
                 Screen.RescheduleByDoctor -> RescheduleByDoctorScreen(
-                    onReschedule = viewModel::openRescheduleAppointment,
+                    notices = doctorNotices,
+                    onApply = viewModel::applyNoticeReschedule,
+                    onDismiss = viewModel::dismissNotice,
                     onBack = viewModel::openReminders,
                 )
 
-                Screen.Reengagement -> ReengagementScreen(onBack = viewModel::backToDoctorSearch)
-                Screen.SeamlessAppointment -> SeamlessAppointmentScreen(onBack = viewModel::backToDoctorSearch)
-                Screen.CopatientCollab -> CopatientCollabScreen(onBack = viewModel::backToDoctorSearch)
+                Screen.Reengagement -> ChatScreen(
+                    title = "Patient reengagement",
+                    messages = reengagementChat,
+                    onSend = viewModel::sendReengagementMessage,
+                    onBack = viewModel::backToDoctorSearch,
+                )
+
+                Screen.SeamlessAppointment -> SeamlessAppointmentScreen(
+                    doctors = doctors,
+                    patients = patients,
+                    dateOptions = dateOptions,
+                    slots = slots,
+                    selectedDoctorId = uiState.selectedDoctorId,
+                    selectedPatientId = uiState.selectedPatientId,
+                    selectedDate = uiState.selectedDateLabel,
+                    selectedSlotId = uiState.selectedSlotId,
+                    plans = ivrPlans,
+                    onPickDoctor = viewModel::openDoctorProfile,
+                    onPickPatient = viewModel::selectPatient,
+                    onPickDate = viewModel::selectDate,
+                    onPickSlot = viewModel::selectSlot,
+                    onSavePlan = viewModel::saveIvrPlan,
+                    onConfirmPlan = viewModel::confirmIvrPlan,
+                    onBack = viewModel::backToDoctorSearch,
+                )
+
+                Screen.CopatientCollab -> CopatientCollabScreen(
+                    state = collaboration,
+                    messages = copatientChat,
+                    onConnectChange = viewModel::setCollaborationConnected,
+                    onSend = viewModel::sendCopatientMessage,
+                    onBack = viewModel::backToDoctorSearch,
+                )
+
                 Screen.Support -> SupportScreen(
+                    tickets = supportTickets,
+                    messages = supportChat,
+                    onCreateTicket = viewModel::createSupportTicket,
+                    onSendChat = viewModel::sendSupportMessage,
                     onFriendsFamily = viewModel::openFriendsAndFamily,
                     onReview = viewModel::openGoogleReview,
                     onReengagement = viewModel::openReengagement,
@@ -240,10 +301,15 @@ fun SchedulaInternshipApp(
 
                 Screen.FriendsFamily -> FriendsFamilyScreen(
                     patients = patients,
+                    onToggleInvite = viewModel::togglePatientInvite,
                     onBack = viewModel::openSupport,
                 )
 
-                Screen.GoogleReview -> GoogleReviewScreen(onBack = viewModel::openSupport)
+                Screen.GoogleReview -> GoogleReviewScreen(
+                    state = reviewState,
+                    onSubmit = viewModel::submitGoogleReview,
+                    onBack = viewModel::openSupport,
+                )
             }
         }
     }
@@ -380,7 +446,7 @@ private fun DoctorProfileScreen(doctor: Doctor?, onBook: () -> Unit, onBack: () 
         Spacer(Modifier.height(10.dp))
         Text("Availability: ${doctor.availabilitySummary}")
         Spacer(Modifier.height(16.dp))
-        Button(onClick = onBook, modifier = Modifier.fillMaxWidth()) { Text("Book Appointment") }
+        Button(onClick = onBook, modifier = Modifier.fillMaxWidth()) { Text("Book / Plan Appointment") }
     }
 }
 
@@ -389,6 +455,8 @@ private fun BookingDateScreen(
     doctor: Doctor?,
     dateOptions: List<String>,
     selectedDate: String,
+    selectedType: AppointmentType,
+    onTypeChange: (AppointmentType) -> Unit,
     onDateSelected: (String) -> Unit,
     onNext: () -> Unit,
     onBack: () -> Unit,
@@ -397,6 +465,15 @@ private fun BookingDateScreen(
         OutlinedButton(onClick = onBack) { Text("Back") }
         Text("Choose date", style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(top = 12.dp))
         Text(doctor?.name ?: "", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Spacer(Modifier.height(12.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = { onTypeChange(AppointmentType.Regular) }) {
+                Text(if (selectedType == AppointmentType.Regular) "Regular ✓" else "Regular")
+            }
+            OutlinedButton(onClick = { onTypeChange(AppointmentType.Online) }) {
+                Text(if (selectedType == AppointmentType.Online) "Online ✓" else "Online")
+            }
+        }
         Spacer(Modifier.height(12.dp))
         dateOptions.forEach { date ->
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -416,6 +493,7 @@ private fun BookingTimeScreen(
     slots: List<Slot>,
     selectedSlotId: String?,
     onSlotClick: (String) -> Unit,
+    onNextAvailable: () -> Unit,
     onNext: () -> Unit,
     onBack: () -> Unit,
 ) {
@@ -423,6 +501,10 @@ private fun BookingTimeScreen(
         OutlinedButton(onClick = onBack) { Text("Back") }
         Text("Choose time", style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(top = 12.dp))
         Text(doctor?.name ?: "", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Spacer(Modifier.height(12.dp))
+        OutlinedButton(onClick = onNextAvailable, modifier = Modifier.fillMaxWidth()) {
+            Text("Next available slot")
+        }
         Spacer(Modifier.height(12.dp))
         LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.weight(1f)) {
             items(slots.filterNot { it.isBooked }, key = { it.id }) { slot ->
@@ -511,12 +593,14 @@ private fun BookingConfirmationScreen(
 }
 
 @Composable
-private fun BookingFailedScreen(onRetry: () -> Unit, onMyAppointments: () -> Unit) {
+private fun BookingFailedScreen(onRetry: () -> Unit, onBookNext: () -> Unit, onMyAppointments: () -> Unit) {
     Column(modifier = Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.Center) {
         Text("Unable to book", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
         Text("Selected slot is no longer available.")
         Spacer(Modifier.height(16.dp))
-        Button(onClick = onRetry, modifier = Modifier.fillMaxWidth()) { Text("Try another slot") }
+        Button(onClick = onBookNext, modifier = Modifier.fillMaxWidth()) { Text("Book next available slot") }
+        Spacer(Modifier.height(8.dp))
+        OutlinedButton(onClick = onRetry, modifier = Modifier.fillMaxWidth()) { Text("Pick another slot") }
         Spacer(Modifier.height(8.dp))
         OutlinedButton(onClick = onMyAppointments, modifier = Modifier.fillMaxWidth()) { Text("Go to My Appt") }
     }
@@ -526,14 +610,32 @@ private fun BookingFailedScreen(onRetry: () -> Unit, onMyAppointments: () -> Uni
 private fun PatientDetailsScreen(
     appointment: Appointment?,
     patient: Patient?,
+    onPay: () -> Unit,
+    onSaveReport: (String) -> Unit,
+    onFollowUp: (Boolean) -> Unit,
     onChat: () -> Unit,
     onMyAppointments: () -> Unit,
 ) {
+    var report by remember(appointment?.id) { mutableStateOf(appointment?.report.orEmpty()) }
+
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
         Text("Patient details", style = MaterialTheme.typography.titleLarge)
         Text("Doctor: ${appointment?.doctorName.orEmpty()}")
         Text("Patient: ${patient?.name.orEmpty()} • ${patient?.age ?: 0} • ${patient?.sex.orEmpty()}")
-        Text("Complaint: ${patient?.complaint.orEmpty()}")
+        Text("Complaint: ${appointment?.complaint.orEmpty()}")
+        Spacer(Modifier.height(12.dp))
+        Text("Payment: ${appointment?.paymentStatus ?: PaymentStatus.Unpaid}")
+        Button(onClick = onPay, enabled = appointment?.paymentStatus == PaymentStatus.Unpaid, modifier = Modifier.fillMaxWidth()) {
+            Text("Pay consultation fee upfront")
+        }
+        Spacer(Modifier.height(8.dp))
+        OutlinedTextField(value = report, onValueChange = { report = it }, label = { Text("Report") }, modifier = Modifier.fillMaxWidth())
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+            Button(onClick = { onSaveReport(report) }, modifier = Modifier.weight(1f)) { Text("Save report") }
+            OutlinedButton(onClick = { onFollowUp(!(appointment?.followUpRequested ?: false)) }, modifier = Modifier.weight(1f)) {
+                Text(if (appointment?.followUpRequested == true) "Follow-up on" else "Request follow-up")
+            }
+        }
         Spacer(Modifier.height(12.dp))
         Button(onClick = onChat, modifier = Modifier.fillMaxWidth()) { Text("Open patient chat") }
         Spacer(Modifier.height(8.dp))
@@ -542,20 +644,35 @@ private fun PatientDetailsScreen(
 }
 
 @Composable
-private fun PatientChatScreen(onBack: () -> Unit) {
+private fun ChatScreen(
+    title: String,
+    messages: List<ChatMessage>,
+    onSend: (String) -> Unit,
+    onBack: () -> Unit,
+) {
+    var text by rememberSaveable { mutableStateOf("") }
+
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
         OutlinedButton(onClick = onBack) { Text("Back") }
         Spacer(Modifier.height(12.dp))
-        Text("Patient chat", style = MaterialTheme.typography.titleLarge)
-        Text("I'm sorry to hear you're not feeling well.")
-        Text("1. Warm compress")
-        Text("2. Rest")
-        Text("3. Bland foods")
-        Text("4. Follow-up if symptoms continue")
+        Text(title, style = MaterialTheme.typography.titleLarge)
+        Spacer(Modifier.height(8.dp))
+        LazyColumn(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            items(messages, key = { it.id }) { msg ->
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column(modifier = Modifier.padding(10.dp)) {
+                        Text(msg.sender.name, fontWeight = FontWeight.SemiBold)
+                        Text(msg.content)
+                    }
+                }
+            }
+        }
+        OutlinedTextField(value = text, onValueChange = { text = it }, label = { Text("Message") }, modifier = Modifier.fillMaxWidth())
+        Spacer(Modifier.height(8.dp))
+        Button(onClick = { onSend(text); text = "" }, modifier = Modifier.fillMaxWidth()) { Text("Send") }
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun MyAppointmentsScreen(
     appointments: List<Appointment>,
@@ -582,6 +699,7 @@ private fun MyAppointmentsScreen(
                     Column(modifier = Modifier.padding(12.dp)) {
                         Text("${appt.doctorName} - ${appt.patientName}")
                         Text("${appt.dateLabel} ${appt.timeLabel} • Token #${appt.tokenNumber}")
+                        Text("Status: ${appt.status}")
                         Button(onClick = { onOpenDetails(appt.id) }) { Text("View") }
                     }
                 }
@@ -602,13 +720,18 @@ private fun AppointmentDetailsScreen(
         return
     }
 
+    val patientsAhead = (appointment.tokenNumber - 3).coerceAtLeast(0)
+    val expectedMinutes = patientsAhead * 5
+
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
         Text("Appointment details", style = MaterialTheme.typography.titleLarge)
         Text("${appointment.doctorName} • ${appointment.specialty}")
         Text("Consulting: ${appointment.dateLabel}, ${appointment.timeLabel}")
         Text("Token: #${appointment.tokenNumber}")
-        Text("Patient: ${appointment.patientName}")
-        Text("Complaint: ${appointment.complaint.orEmpty()}")
+        Text("Live tracking: $patientsAhead patients ahead. Expected in ${expectedMinutes} mins")
+        Text("Payment: ${appointment.paymentStatus}")
+        Text("Report: ${appointment.report.ifBlank { "Not added" }}")
+        Text("Follow-up: ${if (appointment.followUpRequested) "Requested" else "Not requested"}")
         Spacer(Modifier.height(12.dp))
         Button(onClick = onCancel, modifier = Modifier.fillMaxWidth()) { Text("Cancel") }
         Spacer(Modifier.height(8.dp))
@@ -658,20 +781,39 @@ private fun AppointmentRescheduleScreen(
 }
 
 @Composable
-private fun ConsultingFeedbackScreen(onDone: () -> Unit) {
+private fun ConsultingFeedbackScreen(onDone: (Int, Int, Int) -> Unit) {
+    var consulting by rememberSaveable { mutableIntStateOf(4) }
+    var hospital by rememberSaveable { mutableIntStateOf(4) }
+    var waiting by rememberSaveable { mutableIntStateOf(4) }
+
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
         Text("Consulting feedback", style = MaterialTheme.typography.titleLarge)
-        Text("Consulting feedback")
-        Text("Hospital/Clinic feedback")
-        Text("Waiting time")
+        RatingRow("Consulting feedback", consulting) { consulting = it }
+        RatingRow("Hospital/Clinic feedback", hospital) { hospital = it }
+        RatingRow("Waiting time", waiting) { waiting = it }
         Spacer(Modifier.height(16.dp))
-        Button(onClick = onDone, modifier = Modifier.fillMaxWidth()) { Text("Submit") }
+        Button(onClick = { onDone(consulting, hospital, waiting) }, modifier = Modifier.fillMaxWidth()) {
+            Text("Submit")
+        }
+    }
+}
+
+@Composable
+private fun RatingRow(label: String, value: Int, onChange: (Int) -> Unit) {
+    Column(modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
+        Text("$label: $value/5")
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            (1..5).forEach { star ->
+                OutlinedButton(onClick = { onChange(star) }) { Text(star.toString()) }
+            }
+        }
     }
 }
 
 @Composable
 private fun RemindersScreen(
-    upcoming: List<Appointment>,
+    reminders: List<ReminderItem>,
+    onOpenAppointment: (String?) -> Unit,
     onBack: () -> Unit,
     onRescheduleByDoctor: () -> Unit,
 ) {
@@ -679,82 +821,264 @@ private fun RemindersScreen(
         OutlinedButton(onClick = onBack) { Text("Back") }
         Spacer(Modifier.height(12.dp))
         Text("Appointment reminders", style = MaterialTheme.typography.titleLarge)
-        upcoming.forEachIndexed { index, appt ->
-            Text("#${index + 1}. You have an appointment with ${appt.doctorName} at ${appt.timeLabel} for ${appt.patientName}")
-            Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(8.dp))
+        LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.weight(1f)) {
+            items(reminders, key = { it.id }) { reminder ->
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Text(reminder.message)
+                        reminder.appointmentId?.let {
+                            OutlinedButton(onClick = { onOpenAppointment(it) }) { Text("Open") }
+                        }
+                    }
+                }
+            }
         }
-        OutlinedButton(onClick = onRescheduleByDoctor) { Text("Doctor reschedule notice") }
+        OutlinedButton(onClick = onRescheduleByDoctor, modifier = Modifier.fillMaxWidth()) {
+            Text("Doctor reschedule notices")
+        }
     }
 }
 
 @Composable
-private fun RescheduleByDoctorScreen(onReschedule: () -> Unit, onBack: () -> Unit) {
+private fun RescheduleByDoctorScreen(
+    notices: List<DoctorNotice>,
+    onApply: (String) -> Unit,
+    onDismiss: (String) -> Unit,
+    onBack: () -> Unit,
+) {
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
         OutlinedButton(onClick = onBack) { Text("Back") }
         Spacer(Modifier.height(12.dp))
-        Text("Appointment Reschedule by doctor", style = MaterialTheme.typography.titleLarge)
-        Text("One of your appointments was canceled by the clinic.")
-        Spacer(Modifier.height(12.dp))
-        Button(onClick = onReschedule) { Text("Reschedule") }
+        Text("Appointment reschedule by doctor", style = MaterialTheme.typography.titleLarge)
+        LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            items(notices, key = { it.id }) { notice ->
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Text(notice.message)
+                        Spacer(Modifier.height(8.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Button(onClick = { onApply(notice.id) }) { Text("Apply suggested") }
+                            OutlinedButton(onClick = { onDismiss(notice.id) }) { Text("Dismiss") }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
 @Composable
-private fun ReengagementScreen(onBack: () -> Unit) {
-    FeatureNoteScreen(
-        title = "Patient reengagement",
-        lines = listOf(
-            "You had an appointment yesterday.",
-            "How is the patient feeling today?",
-            "Share feedback and schedule follow-up if needed.",
-        ),
-        onBack = onBack,
-    )
+private fun SeamlessAppointmentScreen(
+    doctors: List<Doctor>,
+    patients: List<Patient>,
+    dateOptions: List<String>,
+    slots: List<Slot>,
+    selectedDoctorId: String?,
+    selectedPatientId: String,
+    selectedDate: String,
+    selectedSlotId: String?,
+    plans: List<IvrPlan>,
+    onPickDoctor: (String) -> Unit,
+    onPickPatient: (String) -> Unit,
+    onPickDate: (String) -> Unit,
+    onPickSlot: (String) -> Unit,
+    onSavePlan: (String) -> Unit,
+    onConfirmPlan: (String) -> Unit,
+    onBack: () -> Unit,
+) {
+    var ivrAppId by rememberSaveable { mutableStateOf("IVR-APP-") }
+
+    Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
+        OutlinedButton(onClick = onBack) { Text("Back") }
+        Spacer(Modifier.height(10.dp))
+        Text("Seamless appointment", style = MaterialTheme.typography.titleLarge)
+        Text("Plan via IVR App ID")
+
+        OutlinedTextField(
+            value = ivrAppId,
+            onValueChange = { ivrAppId = it },
+            label = { Text("IVR App ID") },
+            modifier = Modifier.fillMaxWidth(),
+        )
+
+        Spacer(Modifier.height(8.dp))
+        Text("Doctor")
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            doctors.forEach { doctor ->
+                OutlinedButton(onClick = { onPickDoctor(doctor.id) }) {
+                    Text(if (selectedDoctorId == doctor.id) "${doctor.name} ✓" else doctor.name)
+                }
+            }
+        }
+
+        Spacer(Modifier.height(8.dp))
+        Text("Patient")
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            patients.forEach { patient ->
+                OutlinedButton(onClick = { onPickPatient(patient.id) }) {
+                    Text(if (selectedPatientId == patient.id) "${patient.name} ✓" else patient.name)
+                }
+            }
+        }
+
+        Spacer(Modifier.height(8.dp))
+        Text("Date")
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            dateOptions.take(4).forEach { date ->
+                OutlinedButton(onClick = { onPickDate(date) }) {
+                    Text(if (selectedDate == date) "$date ✓" else date)
+                }
+            }
+        }
+
+        Spacer(Modifier.height(8.dp))
+        Text("Slot")
+        LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.height(140.dp)) {
+            items(slots.filterNot { it.isBooked }, key = { it.id }) { slot ->
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text(slot.timeLabel)
+                    OutlinedButton(onClick = { onPickSlot(slot.id) }) {
+                        Text(if (selectedSlotId == slot.id) "Selected" else "Select")
+                    }
+                }
+            }
+        }
+
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+            Button(onClick = { onSavePlan(ivrAppId) }, modifier = Modifier.weight(1f), enabled = selectedDoctorId != null && selectedSlotId != null) {
+                Text("Save plan")
+            }
+        }
+
+        Spacer(Modifier.height(8.dp))
+        Text("Planned IVR appointments")
+        LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.weight(1f)) {
+            items(plans, key = { it.id }) { plan ->
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column(modifier = Modifier.padding(10.dp)) {
+                        Text("${plan.ivrAppId} • ${plan.status}")
+                        Text("Doctor: ${plan.doctorId}, Patient: ${plan.patientId}")
+                        Text("Date: ${plan.dateLabel}")
+                        if (plan.status == IvrPlanStatus.Planned || plan.status == IvrPlanStatus.Confirmed) {
+                            Button(onClick = { onConfirmPlan(plan.id) }) { Text("Confirm payment + convert") }
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 @Composable
-private fun SeamlessAppointmentScreen(onBack: () -> Unit) {
-    FeatureNoteScreen(
-        title = "Seamless appointment",
-        lines = listOf(
-            "You have planned an appointment through IVR.",
-            "Choose date and time and confirm payment.",
-            "IVR App ID is captured in local state.",
-        ),
-        onBack = onBack,
-    )
-}
+private fun CopatientCollabScreen(
+    state: CollaborationState,
+    messages: List<ChatMessage>,
+    onConnectChange: (Boolean) -> Unit,
+    onSend: (String) -> Unit,
+    onBack: () -> Unit,
+) {
+    var text by rememberSaveable { mutableStateOf("") }
 
-@Composable
-private fun CopatientCollabScreen(onBack: () -> Unit) {
-    FeatureNoteScreen(
-        title = "Co-patient collaboration",
-        lines = listOf(
-            "Would you like to connect with other patients",
-            "with similar care needs?",
-        ),
-        onBack = onBack,
-    )
+    Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
+        OutlinedButton(onClick = onBack) { Text("Back") }
+        Spacer(Modifier.height(10.dp))
+        Text("Copatient collaboration", style = MaterialTheme.typography.titleLarge)
+        Text("Group: ${state.groupName}")
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(onClick = { onConnectChange(!state.connected) }) {
+                Text(if (state.connected) "Disconnect" else "Connect")
+            }
+            Text(if (state.connected) "Connected" else "Not connected")
+        }
+
+        Spacer(Modifier.height(8.dp))
+        LazyColumn(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            items(messages, key = { it.id }) { msg ->
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column(modifier = Modifier.padding(10.dp)) {
+                        Text(msg.sender.name, fontWeight = FontWeight.SemiBold)
+                        Text(msg.content)
+                    }
+                }
+            }
+        }
+
+        OutlinedTextField(value = text, onValueChange = { text = it }, label = { Text("Message") }, modifier = Modifier.fillMaxWidth())
+        Spacer(Modifier.height(8.dp))
+        Button(onClick = { onSend(text); text = "" }, modifier = Modifier.fillMaxWidth(), enabled = state.connected) { Text("Send") }
+    }
 }
 
 @Composable
 private fun SupportScreen(
+    tickets: List<SupportTicket>,
+    messages: List<ChatMessage>,
+    onCreateTicket: (String, String) -> Unit,
+    onSendChat: (String) -> Unit,
     onFriendsFamily: () -> Unit,
     onReview: () -> Unit,
     onReengagement: () -> Unit,
     onLogout: () -> Unit,
 ) {
-    Column(modifier = Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    var subject by rememberSaveable { mutableStateOf("") }
+    var message by rememberSaveable { mutableStateOf("") }
+    var chat by rememberSaveable { mutableStateOf("") }
+
+    Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
         Text("Patient - Customer Support", style = MaterialTheme.typography.titleLarge)
-        Button(onClick = onFriendsFamily, modifier = Modifier.fillMaxWidth()) { Text("Friends & Family") }
-        Button(onClick = onReview, modifier = Modifier.fillMaxWidth()) { Text("Google Review") }
-        Button(onClick = onReengagement, modifier = Modifier.fillMaxWidth()) { Text("Reengagement") }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            AssistChip(onClick = onFriendsFamily, label = { Text("Friends & Family") })
+            AssistChip(onClick = onReview, label = { Text("Google Review") })
+            AssistChip(onClick = onReengagement, label = { Text("Reengagement") })
+        }
+        Spacer(Modifier.height(8.dp))
+
+        OutlinedTextField(subject, { subject = it }, label = { Text("Ticket subject") }, modifier = Modifier.fillMaxWidth())
+        OutlinedTextField(message, { message = it }, label = { Text("Ticket message") }, modifier = Modifier.fillMaxWidth())
+        Button(onClick = { onCreateTicket(subject, message); subject = ""; message = "" }, modifier = Modifier.fillMaxWidth()) {
+            Text("Create support ticket")
+        }
+
+        Spacer(Modifier.height(8.dp))
+        Text("Tickets", fontWeight = FontWeight.SemiBold)
+        LazyColumn(modifier = Modifier.height(130.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            items(tickets, key = { it.id }) { ticket ->
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column(modifier = Modifier.padding(8.dp)) {
+                        Text("${ticket.subject} • ${ticket.status}")
+                        Text(ticket.message)
+                    }
+                }
+            }
+        }
+
+        Spacer(Modifier.height(8.dp))
+        Text("Support chat", fontWeight = FontWeight.SemiBold)
+        LazyColumn(modifier = Modifier.height(130.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            items(messages, key = { it.id }) { msg ->
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column(modifier = Modifier.padding(8.dp)) {
+                        Text(msg.sender.name)
+                        Text(msg.content)
+                    }
+                }
+            }
+        }
+
+        OutlinedTextField(chat, { chat = it }, label = { Text("Chat message") }, modifier = Modifier.fillMaxWidth())
+        Button(onClick = { onSendChat(chat); chat = "" }, modifier = Modifier.fillMaxWidth()) { Text("Send") }
+        Spacer(Modifier.height(8.dp))
         OutlinedButton(onClick = onLogout, modifier = Modifier.fillMaxWidth()) { Text("Logout") }
     }
 }
 
 @Composable
-private fun FriendsFamilyScreen(patients: List<Patient>, onBack: () -> Unit) {
+private fun FriendsFamilyScreen(
+    patients: List<Patient>,
+    onToggleInvite: (String, Boolean) -> Unit,
+    onBack: () -> Unit,
+) {
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
         OutlinedButton(onClick = onBack) { Text("Back") }
         Spacer(Modifier.height(12.dp))
@@ -764,7 +1088,9 @@ private fun FriendsFamilyScreen(patients: List<Patient>, onBack: () -> Unit) {
                 Card(modifier = Modifier.fillMaxWidth()) {
                     Row(modifier = Modifier.fillMaxWidth().padding(12.dp), horizontalArrangement = Arrangement.SpaceBetween) {
                         Text("${patient.name} | ${patient.sex} | ${patient.age} | ${patient.relation}")
-                        Text("Invite")
+                        OutlinedButton(onClick = { onToggleInvite(patient.id, !patient.invited) }) {
+                            Text(if (patient.invited) "Invited" else "Invite")
+                        }
                     }
                 }
             }
@@ -773,24 +1099,22 @@ private fun FriendsFamilyScreen(patients: List<Patient>, onBack: () -> Unit) {
 }
 
 @Composable
-private fun GoogleReviewScreen(onBack: () -> Unit) {
-    FeatureNoteScreen(
-        title = "Google Review Requested",
-        lines = listOf(
-            "Express your gratitude",
-            "for the doctor by posting",
-            "a review in Google",
-        ),
-        onBack = onBack,
-    )
-}
+private fun GoogleReviewScreen(
+    state: GoogleReviewState,
+    onSubmit: (Int, String) -> Unit,
+    onBack: () -> Unit,
+) {
+    var rating by rememberSaveable { mutableIntStateOf(state.rating ?: 5) }
+    var comment by rememberSaveable { mutableStateOf(state.comment) }
 
-@Composable
-private fun FeatureNoteScreen(title: String, lines: List<String>, onBack: () -> Unit) {
     Column(modifier = Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         OutlinedButton(onClick = onBack) { Text("Back") }
-        Text(title, style = MaterialTheme.typography.titleLarge)
-        lines.forEach { Text(it) }
+        Text("Google Review Requested", style = MaterialTheme.typography.titleLarge)
+        Text("Express your gratitude for the doctor")
+        Text("Status: ${if (state.submitted) "Submitted" else "Pending"}")
+        RatingRow("Rating", rating) { rating = it }
+        OutlinedTextField(comment, { comment = it }, label = { Text("Comment") }, modifier = Modifier.fillMaxWidth())
+        Button(onClick = { onSubmit(rating, comment) }, modifier = Modifier.fillMaxWidth()) { Text("Submit review") }
     }
 }
 

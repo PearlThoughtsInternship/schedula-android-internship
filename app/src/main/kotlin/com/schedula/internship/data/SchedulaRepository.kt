@@ -18,10 +18,23 @@ import androidx.room.Update
 import com.schedula.internship.model.Appointment
 import com.schedula.internship.model.AppointmentStatus
 import com.schedula.internship.model.AppointmentType
+import com.schedula.internship.model.ChatMessage
+import com.schedula.internship.model.ChatSender
+import com.schedula.internship.model.ChatThreadType
+import com.schedula.internship.model.CollaborationState
 import com.schedula.internship.model.Doctor
+import com.schedula.internship.model.DoctorNotice
+import com.schedula.internship.model.GoogleReviewState
+import com.schedula.internship.model.IvrPlan
+import com.schedula.internship.model.IvrPlanStatus
 import com.schedula.internship.model.Patient
+import com.schedula.internship.model.PaymentStatus
+import com.schedula.internship.model.ReminderItem
 import com.schedula.internship.model.Slot
+import com.schedula.internship.model.SupportTicket
+import com.schedula.internship.model.SupportTicketStatus
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 
 private const val MetaLoggedInPhone = "logged_in_phone"
@@ -48,6 +61,7 @@ data class PatientEntity(
     val relation: String,
     val weightKg: Int,
     val complaint: String,
+    val invited: Boolean,
 )
 
 @Entity(
@@ -107,7 +121,68 @@ data class AppointmentEntity(
     val complaint: String?,
     val status: String,
     val type: String,
+    val paymentStatus: String,
+    val report: String,
+    val followUpRequested: Boolean,
+    val consultingFeedback: Int?,
+    val hospitalFeedback: Int?,
+    val waitingTimeFeedback: Int?,
     val createdAtEpochMillis: Long,
+)
+
+@Entity(tableName = "chat_messages")
+data class ChatMessageEntity(
+    @androidx.room.PrimaryKey val id: String,
+    val threadType: String,
+    val sender: String,
+    val content: String,
+    val createdAtEpochMillis: Long,
+)
+
+@Entity(tableName = "support_tickets")
+data class SupportTicketEntity(
+    @androidx.room.PrimaryKey val id: String,
+    val subject: String,
+    val message: String,
+    val status: String,
+    val createdAtEpochMillis: Long,
+)
+
+@Entity(tableName = "doctor_notices")
+data class DoctorNoticeEntity(
+    @androidx.room.PrimaryKey val id: String,
+    val appointmentId: String,
+    val message: String,
+    val suggestedSlotId: String?,
+    val resolved: Boolean,
+)
+
+@Entity(tableName = "ivr_plans")
+data class IvrPlanEntity(
+    @androidx.room.PrimaryKey val id: String,
+    val doctorId: String,
+    val patientId: String,
+    val ivrAppId: String,
+    val dateLabel: String,
+    val slotId: String,
+    val paymentConfirmed: Boolean,
+    val status: String,
+)
+
+@Entity(tableName = "collaboration_state")
+data class CollaborationEntity(
+    @androidx.room.PrimaryKey val id: String,
+    val connected: Boolean,
+    val groupName: String,
+)
+
+@Entity(tableName = "google_review_state")
+data class GoogleReviewEntity(
+    @androidx.room.PrimaryKey val id: String,
+    val requested: Boolean,
+    val submitted: Boolean,
+    val rating: Int?,
+    val comment: String,
 )
 
 @Entity(tableName = "app_meta")
@@ -141,6 +216,21 @@ interface SchedulaDao {
     fun insertAppointments(appointments: List<AppointmentEntity>)
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
+    fun insertChatMessages(messages: List<ChatMessageEntity>)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    fun insertDoctorNotices(notices: List<DoctorNoticeEntity>)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    fun insertIvrPlans(plans: List<IvrPlanEntity>)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    fun upsertCollaboration(entity: CollaborationEntity)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    fun upsertGoogleReview(entity: GoogleReviewEntity)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
     fun upsertMeta(meta: AppMetaEntity)
 
     @Query("SELECT * FROM doctors ORDER BY name")
@@ -164,6 +254,9 @@ interface SchedulaDao {
     @Query("SELECT * FROM slots WHERE id = :slotId LIMIT 1")
     fun getSlot(slotId: String): SlotEntity?
 
+    @Query("SELECT * FROM slots WHERE doctorId = :doctorId AND isBooked = 0 ORDER BY dateOrder, timeOrder LIMIT 1")
+    fun getNextAvailableSlot(doctorId: String): SlotEntity?
+
     @Query("UPDATE slots SET isBooked = :isBooked WHERE id = :slotId")
     fun setSlotBooked(slotId: String, isBooked: Boolean)
 
@@ -178,6 +271,9 @@ interface SchedulaDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     fun insertPatient(patient: PatientEntity)
+
+    @Update
+    fun updatePatient(patient: PatientEntity)
 
     @Transaction
     @Query("SELECT * FROM appointments ORDER BY createdAtEpochMillis DESC")
@@ -203,13 +299,61 @@ interface SchedulaDao {
     @Update
     fun updateAppointment(appointment: AppointmentEntity)
 
+    @Query("SELECT * FROM chat_messages WHERE threadType = :threadType ORDER BY createdAtEpochMillis")
+    fun observeChatMessages(threadType: String): Flow<List<ChatMessageEntity>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    fun insertChatMessage(message: ChatMessageEntity)
+
+    @Query("SELECT * FROM support_tickets ORDER BY createdAtEpochMillis DESC")
+    fun observeSupportTickets(): Flow<List<SupportTicketEntity>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    fun insertSupportTicket(ticket: SupportTicketEntity)
+
+    @Query("SELECT * FROM doctor_notices WHERE resolved = 0")
+    fun observeDoctorNotices(): Flow<List<DoctorNoticeEntity>>
+
+    @Query("SELECT * FROM doctor_notices WHERE id = :noticeId LIMIT 1")
+    fun getDoctorNotice(noticeId: String): DoctorNoticeEntity?
+
+    @Update
+    fun updateDoctorNotice(notice: DoctorNoticeEntity)
+
+    @Query("SELECT * FROM ivr_plans ORDER BY id DESC")
+    fun observeIvrPlans(): Flow<List<IvrPlanEntity>>
+
+    @Query("SELECT * FROM ivr_plans WHERE id = :planId LIMIT 1")
+    fun getIvrPlan(planId: String): IvrPlanEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    fun upsertIvrPlan(plan: IvrPlanEntity)
+
+    @Query("SELECT * FROM collaboration_state WHERE id = 'default' LIMIT 1")
+    fun observeCollaboration(): Flow<CollaborationEntity?>
+
+    @Query("SELECT * FROM google_review_state WHERE id = 'default' LIMIT 1")
+    fun observeGoogleReview(): Flow<GoogleReviewEntity?>
+
     @Query("SELECT value FROM app_meta WHERE key = :key LIMIT 1")
     fun observeMetaValue(key: String): Flow<String?>
 }
 
 @Database(
-    entities = [DoctorEntity::class, PatientEntity::class, SlotEntity::class, AppointmentEntity::class, AppMetaEntity::class],
-    version = 1,
+    entities = [
+        DoctorEntity::class,
+        PatientEntity::class,
+        SlotEntity::class,
+        AppointmentEntity::class,
+        ChatMessageEntity::class,
+        SupportTicketEntity::class,
+        DoctorNoticeEntity::class,
+        IvrPlanEntity::class,
+        CollaborationEntity::class,
+        GoogleReviewEntity::class,
+        AppMetaEntity::class,
+    ],
+    version = 2,
     exportSchema = false,
 )
 abstract class SchedulaDatabase : RoomDatabase() {
@@ -217,7 +361,9 @@ abstract class SchedulaDatabase : RoomDatabase() {
 
     companion object {
         fun build(context: Context): SchedulaDatabase {
-            return Room.databaseBuilder(context, SchedulaDatabase::class.java, "schedula-internship.db").build()
+            return Room.databaseBuilder(context, SchedulaDatabase::class.java, "schedula-internship.db")
+                .fallbackToDestructiveMigration()
+                .build()
         }
     }
 }
@@ -243,13 +389,18 @@ interface SchedulaRepository {
     suspend fun ensureSeeded()
     fun observeLoggedInPhone(): Flow<String?>
     suspend fun setLoggedInPhone(phone: String?)
+
     fun observeDoctors(query: String): Flow<List<Doctor>>
     fun observeDoctor(doctorId: String): Flow<Doctor?>
     fun observeDateOptions(doctorId: String): Flow<List<String>>
     fun observeSlots(doctorId: String, dateLabel: String): Flow<List<Slot>>
+    suspend fun getNextAvailableSlot(doctorId: String): Slot?
+
     fun observePatients(): Flow<List<Patient>>
     fun observePatient(patientId: String): Flow<Patient?>
     suspend fun addOrUpdatePatient(patient: Patient)
+    suspend fun setPatientInvite(patientId: String, invited: Boolean)
+
     fun observeAppointments(): Flow<List<Appointment>>
     fun observeAppointment(appointmentId: String): Flow<Appointment?>
     suspend fun bookAppointment(
@@ -262,6 +413,31 @@ interface SchedulaRepository {
 
     suspend fun cancelAppointment(appointmentId: String)
     suspend fun rescheduleAppointment(appointmentId: String, newSlotId: String): BookingResult
+
+    suspend fun markPaymentPaid(appointmentId: String)
+    suspend fun saveAppointmentReport(appointmentId: String, report: String)
+    suspend fun setFollowUpRequested(appointmentId: String, requested: Boolean)
+    suspend fun submitConsultingFeedback(appointmentId: String, consulting: Int, hospital: Int, waiting: Int)
+
+    fun observeReminders(): Flow<List<ReminderItem>>
+    fun observeDoctorNotices(): Flow<List<DoctorNotice>>
+    suspend fun resolveDoctorNotice(noticeId: String)
+
+    fun observeChat(threadType: ChatThreadType): Flow<List<ChatMessage>>
+    suspend fun sendChatMessage(threadType: ChatThreadType, sender: ChatSender, content: String)
+
+    fun observeSupportTickets(): Flow<List<SupportTicket>>
+    suspend fun createSupportTicket(subject: String, message: String)
+
+    fun observeIvrPlans(): Flow<List<IvrPlan>>
+    suspend fun upsertIvrPlan(plan: IvrPlan)
+    suspend fun confirmIvrPlan(planId: String): BookingResult
+
+    fun observeCollaborationState(): Flow<CollaborationState>
+    suspend fun setCollaborationConnected(connected: Boolean)
+
+    fun observeGoogleReviewState(): Flow<GoogleReviewState>
+    suspend fun submitGoogleReview(rating: Int, comment: String)
 }
 
 class SqliteSchedulaRepository(
@@ -276,6 +452,11 @@ class SqliteSchedulaRepository(
             dao.insertPatients(seedPatients())
             dao.insertSlots(seedSlots())
             dao.insertAppointments(seedAppointments())
+            dao.insertChatMessages(seedChatMessages())
+            dao.insertDoctorNotices(seedDoctorNotices())
+            dao.insertIvrPlans(seedIvrPlans())
+            dao.upsertCollaboration(CollaborationEntity(id = "default", connected = false, groupName = "New Mothers Group"))
+            dao.upsertGoogleReview(GoogleReviewEntity(id = "default", requested = true, submitted = false, rating = null, comment = ""))
             dao.upsertMeta(AppMetaEntity(MetaLoggedInPhone, ""))
         }
     }
@@ -290,21 +471,27 @@ class SqliteSchedulaRepository(
 
     override fun observeDoctors(query: String): Flow<List<Doctor>> {
         val src = if (query.isBlank()) dao.observeDoctors() else dao.searchDoctors(query)
-        return src.map { list -> list.map(DoctorEntity::toModel) }
+        return src.map { rows -> rows.map(DoctorEntity::toModel) }
     }
 
     override fun observeDoctor(doctorId: String): Flow<Doctor?> {
         return dao.observeDoctor(doctorId).map { it?.toModel() }
     }
 
-    override fun observeDateOptions(doctorId: String): Flow<List<String>> = dao.observeDateOptions(doctorId)
+    override fun observeDateOptions(doctorId: String): Flow<List<String>> {
+        return dao.observeDateOptions(doctorId)
+    }
 
     override fun observeSlots(doctorId: String, dateLabel: String): Flow<List<Slot>> {
-        return dao.observeSlotsForDate(doctorId, dateLabel).map { list -> list.map(SlotEntity::toModel) }
+        return dao.observeSlotsForDate(doctorId, dateLabel).map { rows -> rows.map(SlotEntity::toModel) }
+    }
+
+    override suspend fun getNextAvailableSlot(doctorId: String): Slot? {
+        return dao.getNextAvailableSlot(doctorId)?.toModel()
     }
 
     override fun observePatients(): Flow<List<Patient>> {
-        return dao.observePatients().map { list -> list.map(PatientEntity::toModel) }
+        return dao.observePatients().map { rows -> rows.map(PatientEntity::toModel) }
     }
 
     override fun observePatient(patientId: String): Flow<Patient?> {
@@ -313,6 +500,11 @@ class SqliteSchedulaRepository(
 
     override suspend fun addOrUpdatePatient(patient: Patient) {
         dao.insertPatient(patient.toEntity())
+    }
+
+    override suspend fun setPatientInvite(patientId: String, invited: Boolean) {
+        val current = dao.getPatient(patientId) ?: return
+        dao.updatePatient(current.copy(invited = invited))
     }
 
     override fun observeAppointments(): Flow<List<Appointment>> {
@@ -351,6 +543,21 @@ class SqliteSchedulaRepository(
                     complaint = patient.complaint,
                     status = AppointmentStatus.Scheduled.name,
                     type = appointmentType.name,
+                    paymentStatus = PaymentStatus.Unpaid.name,
+                    report = "",
+                    followUpRequested = false,
+                    consultingFeedback = null,
+                    hospitalFeedback = null,
+                    waitingTimeFeedback = null,
+                    createdAtEpochMillis = System.currentTimeMillis(),
+                ),
+            )
+            dao.insertChatMessage(
+                ChatMessageEntity(
+                    id = "chat-${System.currentTimeMillis()}",
+                    threadType = ChatThreadType.Patient.name,
+                    sender = ChatSender.System.name,
+                    content = "Appointment confirmed for ${patient.name}. You can add report or request follow-up.",
                     createdAtEpochMillis = System.currentTimeMillis(),
                 ),
             )
@@ -394,6 +601,154 @@ class SqliteSchedulaRepository(
         val updated = dao.getAppointmentRecord(appointmentId)?.toModel()
             ?: return BookingResult.Error("Unable to reload appointment")
         return BookingResult.Success(updated)
+    }
+
+    override suspend fun markPaymentPaid(appointmentId: String) {
+        val current = dao.getAppointment(appointmentId) ?: return
+        dao.updateAppointment(current.copy(paymentStatus = PaymentStatus.Paid.name, createdAtEpochMillis = System.currentTimeMillis()))
+    }
+
+    override suspend fun saveAppointmentReport(appointmentId: String, report: String) {
+        val current = dao.getAppointment(appointmentId) ?: return
+        dao.updateAppointment(current.copy(report = report, createdAtEpochMillis = System.currentTimeMillis()))
+    }
+
+    override suspend fun setFollowUpRequested(appointmentId: String, requested: Boolean) {
+        val current = dao.getAppointment(appointmentId) ?: return
+        dao.updateAppointment(current.copy(followUpRequested = requested, createdAtEpochMillis = System.currentTimeMillis()))
+    }
+
+    override suspend fun submitConsultingFeedback(appointmentId: String, consulting: Int, hospital: Int, waiting: Int) {
+        val current = dao.getAppointment(appointmentId) ?: return
+        dao.updateAppointment(
+            current.copy(
+                consultingFeedback = consulting,
+                hospitalFeedback = hospital,
+                waitingTimeFeedback = waiting,
+                createdAtEpochMillis = System.currentTimeMillis(),
+            ),
+        )
+    }
+
+    override fun observeReminders(): Flow<List<ReminderItem>> {
+        return combine(observeAppointments(), observeDoctorNotices()) { appts, notices ->
+            val appointmentReminders = appts
+                .filter { it.status == AppointmentStatus.Scheduled || it.status == AppointmentStatus.Rescheduled }
+                .mapIndexed { index, appt ->
+                    ReminderItem(
+                        id = "reminder-appt-${appt.id}",
+                        message = "#${index + 1}. You have an appointment with ${appt.doctorName} at ${appt.timeLabel} for ${appt.patientName}",
+                        appointmentId = appt.id,
+                    )
+                }
+
+            val noticeReminders = notices.map { notice ->
+                ReminderItem(
+                    id = "reminder-notice-${notice.id}",
+                    message = notice.message,
+                    appointmentId = notice.appointmentId,
+                )
+            }
+
+            appointmentReminders + noticeReminders
+        }
+    }
+
+    override fun observeDoctorNotices(): Flow<List<DoctorNotice>> {
+        return dao.observeDoctorNotices().map { rows -> rows.map(DoctorNoticeEntity::toModel) }
+    }
+
+    override suspend fun resolveDoctorNotice(noticeId: String) {
+        val current = dao.getDoctorNotice(noticeId) ?: return
+        dao.updateDoctorNotice(current.copy(resolved = true))
+    }
+
+    override fun observeChat(threadType: ChatThreadType): Flow<List<ChatMessage>> {
+        return dao.observeChatMessages(threadType.name).map { rows -> rows.map(ChatMessageEntity::toModel) }
+    }
+
+    override suspend fun sendChatMessage(threadType: ChatThreadType, sender: ChatSender, content: String) {
+        if (content.isBlank()) return
+        dao.insertChatMessage(
+            ChatMessageEntity(
+                id = "chat-${System.currentTimeMillis()}",
+                threadType = threadType.name,
+                sender = sender.name,
+                content = content.trim(),
+                createdAtEpochMillis = System.currentTimeMillis(),
+            ),
+        )
+    }
+
+    override fun observeSupportTickets(): Flow<List<SupportTicket>> {
+        return dao.observeSupportTickets().map { rows -> rows.map(SupportTicketEntity::toModel) }
+    }
+
+    override suspend fun createSupportTicket(subject: String, message: String) {
+        if (subject.isBlank() || message.isBlank()) return
+        dao.insertSupportTicket(
+            SupportTicketEntity(
+                id = "ticket-${System.currentTimeMillis()}",
+                subject = subject.trim(),
+                message = message.trim(),
+                status = SupportTicketStatus.Open.name,
+                createdAtEpochMillis = System.currentTimeMillis(),
+            ),
+        )
+        sendChatMessage(ChatThreadType.Support, ChatSender.Support, "Support ticket created: ${subject.trim()}")
+    }
+
+    override fun observeIvrPlans(): Flow<List<IvrPlan>> {
+        return dao.observeIvrPlans().map { rows -> rows.map(IvrPlanEntity::toModel) }
+    }
+
+    override suspend fun upsertIvrPlan(plan: IvrPlan) {
+        dao.upsertIvrPlan(plan.toEntity())
+    }
+
+    override suspend fun confirmIvrPlan(planId: String): BookingResult {
+        val plan = dao.getIvrPlan(planId) ?: return BookingResult.Error("IVR plan not found")
+        val confirmed = plan.copy(paymentConfirmed = true, status = IvrPlanStatus.Confirmed.name)
+        dao.upsertIvrPlan(confirmed)
+        val booking = bookAppointment(
+            doctorId = confirmed.doctorId,
+            patientId = confirmed.patientId,
+            slotId = confirmed.slotId,
+            appointmentType = AppointmentType.Regular,
+            channel = "IVR",
+        )
+        if (booking is BookingResult.Success) {
+            dao.upsertIvrPlan(confirmed.copy(status = IvrPlanStatus.Converted.name))
+        }
+        return booking
+    }
+
+    override fun observeCollaborationState(): Flow<CollaborationState> {
+        return dao.observeCollaboration().map { row ->
+            (row ?: CollaborationEntity(id = "default", connected = false, groupName = "New Mothers Group")).toModel()
+        }
+    }
+
+    override suspend fun setCollaborationConnected(connected: Boolean) {
+        dao.upsertCollaboration(CollaborationEntity(id = "default", connected = connected, groupName = "New Mothers Group"))
+    }
+
+    override fun observeGoogleReviewState(): Flow<GoogleReviewState> {
+        return dao.observeGoogleReview().map { row ->
+            (row ?: GoogleReviewEntity(id = "default", requested = true, submitted = false, rating = null, comment = "")).toModel()
+        }
+    }
+
+    override suspend fun submitGoogleReview(rating: Int, comment: String) {
+        dao.upsertGoogleReview(
+            GoogleReviewEntity(
+                id = "default",
+                requested = true,
+                submitted = true,
+                rating = rating,
+                comment = comment,
+            ),
+        )
     }
 
     private fun seedDoctors(): List<DoctorEntity> {
@@ -444,6 +799,7 @@ class SqliteSchedulaRepository(
                 relation = "Self",
                 weightKg = 73,
                 complaint = "General consultation",
+                invited = true,
             ),
             PatientEntity(
                 id = "patient-meena",
@@ -453,6 +809,7 @@ class SqliteSchedulaRepository(
                 relation = "Wife",
                 weightKg = 58,
                 complaint = "Stomach pain",
+                invited = false,
             ),
             PatientEntity(
                 id = "patient-kishore",
@@ -462,6 +819,7 @@ class SqliteSchedulaRepository(
                 relation = "Son",
                 weightKg = 62,
                 complaint = "Fever follow-up",
+                invited = false,
             ),
         )
     }
@@ -505,6 +863,12 @@ class SqliteSchedulaRepository(
                 complaint = "Stomach pain",
                 status = AppointmentStatus.Scheduled.name,
                 type = AppointmentType.Regular.name,
+                paymentStatus = PaymentStatus.Unpaid.name,
+                report = "",
+                followUpRequested = false,
+                consultingFeedback = null,
+                hospitalFeedback = null,
+                waitingTimeFeedback = null,
                 createdAtEpochMillis = System.currentTimeMillis() - 30_000,
             ),
             AppointmentEntity(
@@ -517,7 +881,73 @@ class SqliteSchedulaRepository(
                 complaint = "General consultation",
                 status = AppointmentStatus.Completed.name,
                 type = AppointmentType.Online.name,
+                paymentStatus = PaymentStatus.Paid.name,
+                report = "Recovered well",
+                followUpRequested = false,
+                consultingFeedback = 5,
+                hospitalFeedback = 4,
+                waitingTimeFeedback = 4,
                 createdAtEpochMillis = System.currentTimeMillis() - 86_400_000,
+            ),
+        )
+    }
+
+    private fun seedChatMessages(): List<ChatMessageEntity> {
+        return listOf(
+            ChatMessageEntity(
+                id = "chat-seed-patient-1",
+                threadType = ChatThreadType.Patient.name,
+                sender = ChatSender.Doctor.name,
+                content = "I'm sorry to hear you're not feeling well. Please use warm compress and rest.",
+                createdAtEpochMillis = System.currentTimeMillis() - 50_000,
+            ),
+            ChatMessageEntity(
+                id = "chat-seed-reengagement-1",
+                threadType = ChatThreadType.Reengagement.name,
+                sender = ChatSender.System.name,
+                content = "You had an appointment yesterday. How are you feeling today?",
+                createdAtEpochMillis = System.currentTimeMillis() - 25_000,
+            ),
+            ChatMessageEntity(
+                id = "chat-seed-support-1",
+                threadType = ChatThreadType.Support.name,
+                sender = ChatSender.Support.name,
+                content = "Support is available 24x7. Share your issue and we will help.",
+                createdAtEpochMillis = System.currentTimeMillis() - 20_000,
+            ),
+            ChatMessageEntity(
+                id = "chat-seed-copatient-1",
+                threadType = ChatThreadType.Copatient.name,
+                sender = ChatSender.System.name,
+                content = "Would you like to connect with other new mothers visiting this doctor?",
+                createdAtEpochMillis = System.currentTimeMillis() - 15_000,
+            ),
+        )
+    }
+
+    private fun seedDoctorNotices(): List<DoctorNoticeEntity> {
+        return listOf(
+            DoctorNoticeEntity(
+                id = "notice-1",
+                appointmentId = "appointment-seed-1",
+                message = "Appointment was rescheduled by clinic. Please choose another slot.",
+                suggestedSlotId = "doctor-lavangi-Tomorrow-1",
+                resolved = false,
+            ),
+        )
+    }
+
+    private fun seedIvrPlans(): List<IvrPlanEntity> {
+        return listOf(
+            IvrPlanEntity(
+                id = "ivr-plan-1",
+                doctorId = "doctor-lavangi",
+                patientId = "patient-self",
+                ivrAppId = "IVR-APP-1001",
+                dateLabel = "Tomorrow",
+                slotId = "doctor-lavangi-Tomorrow-2",
+                paymentConfirmed = false,
+                status = IvrPlanStatus.Planned.name,
             ),
         )
     }
@@ -528,11 +958,11 @@ private fun DoctorEntity.toModel(): Doctor {
 }
 
 private fun PatientEntity.toModel(): Patient {
-    return Patient(id, name, age, sex, relation, weightKg, complaint)
+    return Patient(id, name, age, sex, relation, weightKg, complaint, invited)
 }
 
 private fun Patient.toEntity(): PatientEntity {
-    return PatientEntity(id, name, age, sex, relation, weightKg, complaint)
+    return PatientEntity(id, name, age, sex, relation, weightKg, complaint, invited)
 }
 
 private fun SlotEntity.toModel(): Slot {
@@ -558,5 +988,75 @@ private fun AppointmentRecord.toModel(): Appointment {
         complaint = appointment.complaint,
         status = AppointmentStatus.valueOf(appointment.status),
         type = AppointmentType.valueOf(appointment.type),
+        paymentStatus = PaymentStatus.valueOf(appointment.paymentStatus),
+        report = appointment.report,
+        followUpRequested = appointment.followUpRequested,
+        consultingFeedback = appointment.consultingFeedback,
+        hospitalFeedback = appointment.hospitalFeedback,
+        waitingTimeFeedback = appointment.waitingTimeFeedback,
     )
+}
+
+private fun ChatMessageEntity.toModel(): ChatMessage {
+    return ChatMessage(
+        id = id,
+        threadType = ChatThreadType.valueOf(threadType),
+        sender = ChatSender.valueOf(sender),
+        content = content,
+        createdAtEpochMillis = createdAtEpochMillis,
+    )
+}
+
+private fun SupportTicketEntity.toModel(): SupportTicket {
+    return SupportTicket(
+        id = id,
+        subject = subject,
+        message = message,
+        status = SupportTicketStatus.valueOf(status),
+        createdAtEpochMillis = createdAtEpochMillis,
+    )
+}
+
+private fun DoctorNoticeEntity.toModel(): DoctorNotice {
+    return DoctorNotice(
+        id = id,
+        appointmentId = appointmentId,
+        message = message,
+        suggestedSlotId = suggestedSlotId,
+        resolved = resolved,
+    )
+}
+
+private fun IvrPlanEntity.toModel(): IvrPlan {
+    return IvrPlan(
+        id = id,
+        doctorId = doctorId,
+        patientId = patientId,
+        ivrAppId = ivrAppId,
+        dateLabel = dateLabel,
+        slotId = slotId,
+        paymentConfirmed = paymentConfirmed,
+        status = IvrPlanStatus.valueOf(status),
+    )
+}
+
+private fun IvrPlan.toEntity(): IvrPlanEntity {
+    return IvrPlanEntity(
+        id = id,
+        doctorId = doctorId,
+        patientId = patientId,
+        ivrAppId = ivrAppId,
+        dateLabel = dateLabel,
+        slotId = slotId,
+        paymentConfirmed = paymentConfirmed,
+        status = status.name,
+    )
+}
+
+private fun CollaborationEntity.toModel(): CollaborationState {
+    return CollaborationState(connected = connected, groupName = groupName)
+}
+
+private fun GoogleReviewEntity.toModel(): GoogleReviewState {
+    return GoogleReviewState(requested = requested, submitted = submitted, rating = rating, comment = comment)
 }

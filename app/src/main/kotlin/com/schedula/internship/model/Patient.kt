@@ -8,4 +8,5 @@ data class Patient(
     val relation: String,
     val weightKg: Int,
     val complaint: String,
+    val invited: Boolean,
 )
